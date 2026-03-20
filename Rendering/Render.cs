@@ -4,19 +4,21 @@ using System.Threading.Tasks;
 public class Render
 {
     private readonly AvaloniaRender _buffer;
-
     private Vec4[]  _clipVerts = Array.Empty<Vec4>();
     private float[] _screenX   = Array.Empty<float>();
     private float[] _screenY   = Array.Empty<float>();
     private bool[]  _inFrustum = Array.Empty<bool>();
+    private Rasterizer? _rasterizer;
+    private Vec3[]      _screenFilled = Array.Empty<Vec3>();   // x,y пикселей + z NDC
+    private Vec3[]      _worldFilled  = Array.Empty<Vec3>();   // мировые координаты
+    private bool[]      _visFilled    = Array.Empty<bool>();
 
     public Render(AvaloniaRender buffer)
     {
         _buffer = buffer;
     }
-
-    public void DrawWireframe(ObjModel? model, Matrix44  modelMat, Matrix44  viewMat, Matrix44  projMat,
-        uint      lineColor = 0xFFC4F8FF)
+    public void DrawWireframe(ObjModel? model, Matrix44 modelMat, Matrix44 viewMat, Matrix44 projMat,
+        uint lineColor = 0xFFC4F8FF)
     {
         _buffer.Clear();
         if (model is null) return;
@@ -38,17 +40,17 @@ public class Render
             _inFrustum  = new bool[capacity];
         }
 
-        var clipVerts  = _clipVerts;
-        var screenX    = _screenX;
-        var screenY    = _screenY;
-        var inFrustum  = _inFrustum;
+        var clipVerts = _clipVerts;
+        var screenX   = _screenX;
+        var screenY   = _screenY;
+        var inFrustum = _inFrustum;
 
         Parallel.For(0, vertCount, i =>
         {
             Vec4 c = mvp.Multiply(new Vec4(verts[i], 1f));
             clipVerts[i] = c;
 
-            if (c.W > 0f && c.X >= -c.W && c.X <= c.W &&  c.Y >= -c.W && c.Y <= c.W && c.Z >= 0f   && c.Z <= c.W)
+            if (c.W > 0f && c.X >= -c.W && c.X <= c.W && c.Y >= -c.W && c.Y <= c.W && c.Z >= 0f && c.Z <= c.W)
             {
                 Vec3 ndc = c.PerspectiveDivide(); // дел на w Normalized Device Coordinates все коорд от -1 до 1
                 Vec4 s   = viewport.Multiply(new Vec4(ndc, 1f)); //перевод NDC в пиксели экрана
@@ -79,18 +81,17 @@ public class Render
 
                 if (idxA >= vertCount || idxB >= vertCount) continue;
 
-                if (inFrustum[idxA] && inFrustum[idxB]) //обе вершины в кадре
+                if (inFrustum[idxA] && inFrustum[idxB])
                 {
                     Bresenham(pw,
                         (int)MathF.Round(screenX[idxA]), (int)MathF.Round(screenY[idxA]),
                         (int)MathF.Round(screenX[idxB]), (int)MathF.Round(screenY[idxB]),
                         lineColor);
                 }
-                else//одна или обе вершины вне кадра
-                { 
+                else
+                {
                     Vec4 clipA = clipVerts[idxA];
                     Vec4 clipB = clipVerts[idxB];
-
                     if (!ClipLine(ref clipA, ref clipB)) continue;
 
                     Vec3 sA = viewport.Multiply(new Vec4(clipA.PerspectiveDivide(), 1f)).XYZ;
@@ -107,7 +108,6 @@ public class Render
 
     private void Bresenham(PixelSet pw, int x0, int y0, int x1, int y1, uint color)
     {
-
         int dx  = Math.Abs(x1 - x0);
         int dy  = Math.Abs(y1 - y0);
         int sx  = x0 < x1 ? 1 : -1;
@@ -152,5 +152,103 @@ public class Render
         b = new(a.X + t1*dX, a.Y + t1*dY, a.Z + t1*dZ, a.W + t1*dW);
         a = new(a.X + t0*dX, a.Y + t0*dY, a.Z + t0*dZ, a.W + t0*dW);
         return true;
+    }
+
+
+    public void DrawFilled(ObjModel? model, Matrix44 modelMat, Matrix44 viewMat,
+        Matrix44 projMat, Vec3 eye, LightSettings light)
+    {
+        _buffer.Clear(0xFF080818);
+        if (model is null) return;
+
+        _rasterizer ??= new Rasterizer(_buffer.Width, _buffer.Height);
+        _rasterizer.Clear();
+
+        Matrix44 mvp      = projMat * viewMat * modelMat;
+        Matrix44 viewport = Matrix44.Viewport(0, 0, _buffer.Width, _buffer.Height);
+
+        var verts     = model.VertCoords;
+        int vertCount = verts.Count;
+
+        if (_screenFilled.Length < vertCount)
+        {
+            int cap = vertCount + 1000;
+            _screenFilled = new Vec3[cap];
+            _worldFilled  = new Vec3[cap];
+            _visFilled    = new bool[cap];
+        }
+
+        Parallel.For(0, vertCount, i =>
+        {
+            _worldFilled[i] = modelMat.Multiply(new Vec4(verts[i], 1f)).XYZ;
+
+            Vec4 clip = mvp.Multiply(new Vec4(verts[i], 1f));
+
+            if (clip.W > 1e-5f)
+            {
+                Vec3 ndc = clip.PerspectiveDivide();      // NDC: x,y [-1,1], z [0,1]
+                Vec4 sv  = viewport.Multiply(new Vec4(ndc, 1f));
+                // x,y — пиксельные координаты; z = NDC.z (не экранный z!)
+                _screenFilled[i] = new Vec3(sv.X, sv.Y, ndc.Z);
+                _visFilled[i]    = true;
+            }
+            else
+            {
+                _visFilled[i] = false;
+            }
+        });
+
+        var pw         = _buffer.GetPixelSet();
+        var faces      = model.Faces;
+        Vec3 normLight = light.Direction.Normalized();
+
+        Parallel.For(0, faces.Count, fi =>
+        {
+            var face      = faces[fi];
+            int faceVerts = face.Vertices.Count;
+            if (faceVerts < 3) return;
+
+            int baseIdx = face.Vertices[0].v;
+            int idx1    = face.Vertices[1].v;
+            int idx2    = face.Vertices[2].v;
+
+            if ((uint)baseIdx >= (uint)vertCount ||
+                (uint)idx1    >= (uint)vertCount ||
+                (uint)idx2    >= (uint)vertCount) return;
+
+            // Нормаль грани (вект * двух смежных рёбер)
+            Vec3 wA = _worldFilled[baseIdx];
+            Vec3 wB = _worldFilled[idx1];
+            Vec3 wC = _worldFilled[idx2];
+            Vec3 fNormal = Vec3.Cross(wB - wA, wC - wA).Normalized();
+
+            Vec3 centroid = (wA + wB + wC) * (1f / 3f);
+            Vec3 viewDir  = (eye - centroid).Normalized();
+
+            // dot(normal, viewDir) > 0 - нормаль смотрит на наблюдателя - рисуем
+            // < 0 - задняя грань - пропускаем
+            if (Vec3.Dot(fNormal, viewDir) <= 0f) return;
+
+
+            float lambert = MathF.Max(0f, Vec3.Dot(fNormal, normLight));
+            uint  color   = Rasterizer.Shade(light.ObjectColor, light.Color, lambert);
+
+            // триангуляция (v0,v1,v2), (v0,v2,v3), …
+            for (int i = 1; i < faceVerts - 1; i++)
+            {
+                int iB = face.Vertices[i    ].v;
+                int iC = face.Vertices[i + 1].v;
+
+                if ((uint)iB >= (uint)vertCount || (uint)iC >= (uint)vertCount) continue;
+                if (!_visFilled[baseIdx] || !_visFilled[iB] || !_visFilled[iC]) continue;
+
+                _rasterizer.DrawTriangle(
+                    pw,
+                    _screenFilled[baseIdx],
+                    _screenFilled[iB],
+                    _screenFilled[iC],
+                    color);
+            }
+        });
     }
 }

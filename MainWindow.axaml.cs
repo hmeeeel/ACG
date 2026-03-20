@@ -25,7 +25,9 @@ public partial class MainWindow : Window
 
     private readonly System.Diagnostics.Stopwatch _fpsWatch =  System.Diagnostics.Stopwatch.StartNew();
     private int _frameCount = 0;
-
+    private bool _filledMode = false;
+    
+    private LightSettings _light = LightSettings.Default;
     public MainWindow()
     {
         InitializeComponent();
@@ -36,6 +38,13 @@ public partial class MainWindow : Window
 
         LoadButton.Click  += OnLoadClick;
         ResetButton.Click += OnResetClick;
+
+        FilledButton.IsCheckedChanged += (_, _) =>
+        {
+            _filledMode = FilledButton.IsChecked ?? false;
+            FilledButton.Content = _filledMode ? "Заполненный" : "Каркас";
+            RequestRender();
+        };
 
         CanvasBorder.PointerPressed += (_, e) =>
         {
@@ -142,8 +151,11 @@ public partial class MainWindow : Window
 
         float    aspect = (float)_avRender.Width / _avRender.Height;
         Matrix44 proj   = Matrix44.Perspective(MathF.PI / 3f, aspect, 0.1f, 100f);
-
-        _render.DrawWireframe(model, modelMat, view, proj);
+        Vec3 lightColor = new Vec3(1f, 1f, 1f);
+        if (_filledMode)
+           _render.DrawFilled(model, modelMat, view, proj, eye, _light);
+            else
+            _render.DrawWireframe(model, modelMat, view, proj);
     }
 
     private async void OnLoadClick(object? sender, RoutedEventArgs e)

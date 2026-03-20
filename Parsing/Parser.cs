@@ -39,7 +39,7 @@ public class Parser
         float x = ParseF(coords[1]);
         float y = ParseF(coords[2]);
         float z = ParseF(coords[3]);
-        float w = 1; // для кривых и поверхностей
+        //float w = 1; // для кривых и поверхностей
         model.VertCoords.Add(new Vec3(x, y, z));
     }
     

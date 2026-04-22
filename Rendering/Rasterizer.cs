@@ -7,18 +7,22 @@ public sealed class Rasterizer
     private readonly int _width;
     private readonly int _height;
     private readonly long[] _zColor;
-
-    private static readonly long ZColorClear =
-        ((long)BitConverter.SingleToInt32Bits(float.MaxValue) << 32) | 0u;
+    private float[] _invWBuffer;    
+    private static readonly long ZColorClear = ((long)BitConverter.SingleToInt32Bits(float.MaxValue) << 32) | 0u;
 
     public Rasterizer(int width, int height)
     {
         _width  = width;
         _height = height;
         _zColor = new long[width * height];
+        _invWBuffer = new float[width * height];
     }
 
-    public void Clear() => Array.Fill(_zColor, ZColorClear);
+    public void Clear()
+{
+    Array.Fill(_zColor, ZColorClear);
+    Array.Fill(_invWBuffer, 0f);
+}
 
     public void FlushToPixels(uint[] pixelBuffer)
     {
@@ -26,17 +30,10 @@ public sealed class Rasterizer
         for (int i = 0; i < len; i++)
         {
             long val = _zColor[i];
-            pixelBuffer[i] = (val == ZColorClear)
-                ? 0xFF080818u
-                : (uint)(val & 0xFFFF_FFFFu);
+            pixelBuffer[i] = (val == ZColorClear) ? 0xFF080818u : (uint)(val & 0xFFFF_FFFFu);
         }
     }
 
-    // ─────────────────────────────────────────────────────────────────
-    //  Общая структура Setup — вычисляет AABB, edge-инкременты, 
-    //  стартовые веса. Возвращает false если треугольник вырожден.
-    // ─────────────────────────────────────────────────────────────────
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private bool SetupTriangle(
         ref Vec3 s0, ref Vec3 s1, ref Vec3 s2,
         out int minX, out int maxX, out int minY, out int maxY,
@@ -50,13 +47,12 @@ public sealed class Rasterizer
         float area = Edge(s0, s1, s2);
         if (float.Abs(area) < 1e-6f)
         {
-            // out-параметры должны быть инициализированы
             minX = maxX = minY = maxY = 0;
             invArea = 0f;
             tl0 = tl1 = tl2 = false;
             dw0_dx = dw0_dy = dw1_dx = dw1_dy = dw2_dx = dw2_dy = 0f;
             w0_row = w1_row = w2_row = 0f;
-            return false;
+            return false; // выр
         }
         if (area < 0f) { (s1, s2) = (s2, s1); area = -area; }
 
@@ -83,9 +79,7 @@ public sealed class Rasterizer
         return true;
     }
 
-    // ─────────────────────────────────────────────────────────────────
-    //  Flat shading — цвет на весь треугольник
-    // ─────────────────────────────────────────────────────────────────
+    // цвет на весь треугольник
     public void DrawTriangle(Vec3 s0, Vec3 s1, Vec3 s2, uint color)
     {
         if (!SetupTriangle(
@@ -117,19 +111,15 @@ public sealed class Rasterizer
         }
     }
 
-    // ─────────────────────────────────────────────────────────────────
-    //  Gouraud — интерполяция цвета по вершинам
-    // ─────────────────────────────────────────────────────────────────
+    // интерполяция цвета по вершинам
     public void DrawTriangleGouraud(
         Vec3 s0, Vec3 s1, Vec3 s2,
         Vec3 c0, Vec3 c1, Vec3 c2)
     {
-        // При смене winding нужно поменять и атрибуты
         float area = Edge(s0, s1, s2);
         if (float.Abs(area) < 1e-6f) return;
         if (area < 0f) { (s1, s2) = (s2, s1); (c1, c2) = (c2, c1); area = -area; }
 
-        // Переиспользуем setup без ref-swap атрибутов
         if (!SetupTriangle(
                 ref s0, ref s1, ref s2,
                 out int minX, out int maxX, out int minY, out int maxY,
@@ -147,46 +137,51 @@ public sealed class Rasterizer
             int   rowBase = y * _width;
             for (int x = minX; x <= maxX; x++)
             {
-                if (InsideTriangle(w0, w1, w2, tl0, tl1, tl2))
+                if (!InsideTriangle(w0, w1, w2, tl0, tl1, tl2))
                 {
-                    float b0 = w0 * invArea, b1 = w1 * invArea, b2 = w2 * invArea;
-                    float z  = b0 * s0.Z + b1 * s1.Z + b2 * s2.Z;
-
-                    // Z-тест ДО вычисления цвета
-                    if (!ZTest(rowBase + x, z)) goto Next;
-
-                    float r = b0 * c0.X + b1 * c1.X + b2 * c2.X;
-                    float g = b0 * c0.Y + b1 * c1.Y + b2 * c2.Y;
-                    float b = b0 * c0.Z + b1 * c1.Z + b2 * c2.Z;
-                    SetPixelAfterZTest(rowBase + x, z, Vec3ToColor(r, g, b));
+                    w0 += dw0_dx; w1 += dw1_dx; w2 += dw2_dx;
+                    continue;
                 }
-                Next:
+
+                float b0 = w0 * invArea, b1 = w1 * invArea, b2 = w2 * invArea;
+                float z  = b0 * s0.Z + b1 * s1.Z + b2 * s2.Z;
+
+                if (!ZTest(rowBase + x, z)) //!!
+                {
+                    w0 += dw0_dx; w1 += dw1_dx; w2 += dw2_dx;
+                    continue;
+                }
+
+                float r = b0 * c0.X + b1 * c1.X + b2 * c2.X;
+                float g = b0 * c0.Y + b1 * c1.Y + b2 * c2.Y;
+                float b = b0 * c0.Z + b1 * c1.Z + b2 * c2.Z;
+                SetPixelAfterZTest(rowBase + x, z, Vec3ToColor(r, g, b));
+
                 w0 += dw0_dx; w1 += dw1_dx; w2 += dw2_dx;
             }
             w0_row += dw0_dy; w1_row += dw1_dy; w2_row += dw2_dy;
         }
     }
 
-    // ─────────────────────────────────────────────────────────────────
-    //  Phong / Blinn-Phong — интерполяция нормалей по пикселям
-    //  Blinn-Phong: specular = pow(dot(H, N), gloss),  H = norm(V - L)
-    //  (L здесь — вектор ОТ фрагмента К источнику, т.е. -lightDir)
-    // ─────────────────────────────────────────────────────────────────
+    //  Phong: R = reflect(-L, N), specular = pow(dot(R, V), gloss)
+    //  Blinn-Phong: H = norm(V + L), specular = pow(dot(H, N), gloss)
     public void DrawTrianglePhong(
-        Vec3 s0,  Vec3 s1,  Vec3 s2,   // screen-space позиции
-        Vec3 n0,  Vec3 n1,  Vec3 n2,   // vertex normals (world)
-        Vec3 wp0, Vec3 wp1, Vec3 wp2,  // vertex positions (world)
-        Vec3 eye, Vec3 lightDir,       // lightDir = нормализованный вектор К источнику
+        Vec3 s0, Vec3 s1, Vec3 s2,
+        float invW0, float invW1, float invW2,
+        Vec3 n0, Vec3 n1, Vec3 n2,
+        Vec3 wp0, Vec3 wp1, Vec3 wp2,
+        Vec3 eye, Vec3 lightDir,
         LightSettings light)
     {
         float area = Edge(s0, s1, s2);
         if (float.Abs(area) < 1e-6f) return;
+
         if (area < 0f)
         {
-            (s1, s2)   = (s2, s1);
-            (n1, n2)   = (n2, n1);
-            (wp1, wp2) = (wp2, wp1);
-            area = -area;
+            (s1, s2)       = (s2, s1);
+            (invW1, invW2) = (invW2, invW1);
+            (n1, n2)       = (n2, n1);
+            (wp1, wp2)     = (wp2, wp1);
         }
 
         if (!SetupTriangle(
@@ -200,115 +195,157 @@ public sealed class Rasterizer
                 out float w0_row, out float w1_row, out float w2_row))
             return;
 
-        // Константы вне цикла
-        Vec3  objColor   = ColorToVec3(light.ObjectColor);
+        Vec3 objColor = ColorToVec3(light.ObjectColor);
         float oR = objColor.X, oG = objColor.Y, oB = objColor.Z;
         float lR = light.Color.X, lG = light.Color.Y, lB = light.Color.Z;
         float aR = light.AmbientColor.X, aG = light.AmbientColor.Y, aB = light.AmbientColor.Z;
         float gloss = light.Glossiness;
         ShadingMode mode = light.Mode;
 
-        // ambient = objColor * ambientColor  (компонентно)
         float ambR = oR * aR, ambG = oG * aG, ambB = oB * aB;
-
-        // lightDir = вектор К источнику (нормализован)
         float lDirX = lightDir.X, lDirY = lightDir.Y, lDirZ = lightDir.Z;
 
         for (int y = minY; y <= maxY; y++)
         {
-            float w0 = w0_row, w1 = w1_row, w2 = w2_row;
-            int   rowBase = y * _width;
+            float w0 = w0_row;
+            float w1 = w1_row;
+            float w2 = w2_row;
+            int rowBase = y * _width;
+
             for (int x = minX; x <= maxX; x++)
             {
-                if (InsideTriangle(w0, w1, w2, tl0, tl1, tl2))
+                if (!InsideTriangle(w0, w1, w2, tl0, tl1, tl2))
                 {
-                    float b0 = w0 * invArea, b1 = w1 * invArea, b2 = w2 * invArea;
-                    float z  = b0 * s0.Z + b1 * s1.Z + b2 * s2.Z;
-
-                    // ── Z-ТЕСТ ДО освещения ──────────────────────────
-                    if (!ZTest(rowBase + x, z)) goto Next;
-
-                    // ── Интерполяция нормали (без new Vec3) ──────────
-                    float nx = b0 * n0.X + b1 * n1.X + b2 * n2.X;
-                    float ny = b0 * n0.Y + b1 * n1.Y + b2 * n2.Y;
-                    float nz = b0 * n0.Z + b1 * n1.Z + b2 * n2.Z;
-                    // Нормализация
-                    float nLen = float.Sqrt(nx*nx + ny*ny + nz*nz);
-                    if (nLen > 1e-7f) { float inv = 1f/nLen; nx *= inv; ny *= inv; nz *= inv; }
-
-                    // ── Интерполяция мировой позиции ─────────────────
-                    float px = b0 * wp0.X + b1 * wp1.X + b2 * wp2.X;
-                    float py = b0 * wp0.Y + b1 * wp1.Y + b2 * wp2.Y;
-                    float pz = b0 * wp0.Z + b1 * wp1.Z + b2 * wp2.Z;
-
-                    // ── V = normalize(eye - fragPos) ─────────────────
-                    float vx = eye.X - px, vy = eye.Y - py, vz = eye.Z - pz;
-                    float vLen = float.Sqrt(vx*vx + vy*vy + vz*vz);
-                    if (vLen > 1e-7f) { float inv = 1f/vLen; vx *= inv; vy *= inv; vz *= inv; }
-
-                    float cR, cG, cB;
-
-                    switch (mode)
-                    {
-                        case ShadingMode.Ambient:
-                            cR = ambR; cG = ambG; cB = ambB;
-                            break;
-
-                        case ShadingMode.Diffuse:
-                        {
-                            // dot(N, L)  — L = lightDir (к источнику)
-                            float diff = float.Max(0f, nx*lDirX + ny*lDirY + nz*lDirZ);
-                            cR = lR * oR * diff;
-                            cG = lG * oG * diff;
-                            cB = lB * oB * diff;
-                            break;
-                        }
-
-                        case ShadingMode.Specular:
-                        {
-                            // Blinn-Phong: H = normalize(L + V)
-                            float hx = lDirX + vx, hy = lDirY + vy, hz = lDirZ + vz;
-                            float hLen = float.Sqrt(hx*hx + hy*hy + hz*hz);
-                            if (hLen > 1e-7f) { float inv = 1f/hLen; hx *= inv; hy *= inv; hz *= inv; }
-                            float spec = float.Pow(float.Max(0f, nx*hx + ny*hy + nz*hz), gloss);
-                            cR = lR * spec; cG = lG * spec; cB = lB * spec;
-                            break;
-                        }
-
-                        default: // PhongBlinn (ambient + diffuse + specular)
-                        {
-                            float diff = float.Max(0f, nx*lDirX + ny*lDirY + nz*lDirZ);
-                            float dR   = lR * oR * diff;
-                            float dG   = lG * oG * diff;
-                            float dB   = lB * oB * diff;
-
-                            // H = normalize(L + V)
-                            float hx = lDirX + vx, hy = lDirY + vy, hz = lDirZ + vz;
-                            float hLen = float.Sqrt(hx*hx + hy*hy + hz*hz);
-                            if (hLen > 1e-7f) { float inv = 1f/hLen; hx *= inv; hy *= inv; hz *= inv; }
-                            float spec = float.Pow(float.Max(0f, nx*hx + ny*hy + nz*hz), gloss);
-                            float sR   = lR * spec, sG = lG * spec, sB = lB * spec;
-
-                            cR = ambR + dR + sR;
-                            cG = ambG + dG + sG;
-                            cB = ambB + dB + sB;
-                            break;
-                        }
-                    }
-
-                    SetPixelAfterZTest(rowBase + x, z, Vec3ToColor(cR, cG, cB));
+                    w0 += dw0_dx; w1 += dw1_dx; w2 += dw2_dx;
+                    continue;
                 }
-                Next:
-                w0 += dw0_dx; w1 += dw1_dx; w2 += dw2_dx;
+
+                float b0 = w0 * invArea;
+                float b1 = w1 * invArea;
+                float b2 = w2 * invArea;
+                float z = b0 * s0.Z + b1 * s1.Z + b2 * s2.Z;
+
+                if (!ZTest(rowBase + x, z))
+                {
+                    w0 += dw0_dx; w1 += dw1_dx; w2 += dw2_dx;
+                    continue;
+                }
+
+                float invW = b0 * invW0 + b1 * invW1 + b2 * invW2;
+                float persp = invW > 1e-7f ? 1f / invW : 0f;
+
+                float pc0 = b0 * invW0 * persp;
+                float pc1 = b1 * invW1 * persp;
+                float pc2 = b2 * invW2 * persp;
+
+                float nx = pc0 * n0.X + pc1 * n1.X + pc2 * n2.X;
+                float ny = pc0 * n0.Y + pc1 * n1.Y + pc2 * n2.Y;
+                float nz = pc0 * n0.Z + pc1 * n1.Z + pc2 * n2.Z;
+
+                float nLen = float.Sqrt(nx * nx + ny * ny + nz * nz);
+                if (nLen > 1e-7f)
+                {
+                    float invN = 1f / nLen;
+                    nx *= invN; ny *= invN; nz *= invN;
+                }
+
+                float px = pc0 * wp0.X + pc1 * wp1.X + pc2 * wp2.X;
+                float py = pc0 * wp0.Y + pc1 * wp1.Y + pc2 * wp2.Y;
+                float pz = pc0 * wp0.Z + pc1 * wp1.Z + pc2 * wp2.Z;
+
+                float vx = eye.X - px;
+                float vy = eye.Y - py;
+                float vz = eye.Z - pz;
+                float vLen = float.Sqrt(vx * vx + vy * vy + vz * vz);
+                if (vLen > 1e-7f)
+                {
+                    float invV = 1f / vLen;
+                    vx *= invV; vy *= invV; vz *= invV;
+                }
+
+                float cR, cG, cB;
+
+                switch (mode)
+                {
+                    case ShadingMode.Ambient:// objColor * ambientColor
+                        cR = ambR; cG = ambG; cB = ambB;
+                        break;
+
+                    case ShadingMode.Diffuse: // LightColor * objColor * max(0, dot(N, -L))
+                        float diffD = float.Max(0f, nx * lDirX + ny * lDirY + nz * lDirZ);
+                        cR = lR * oR * diffD;
+                        cG = lG * oG * diffD;
+                        cB = lB * oB * diffD;
+                        break;
+
+                    case ShadingMode.Specular: // LightColor * pow(max(0, dot(H, N)), gloss)
+                        float hxS = lDirX + vx, hyS = lDirY + vy, hzS = lDirZ + vz;
+                        float hLenS = float.Sqrt(hxS * hxS + hyS * hyS + hzS * hzS);
+                        float specS = 0f;
+                        if (hLenS > 1e-7f)
+                        {
+                            float invH = 1f / hLenS;
+                            specS = float.Pow(float.Max(0f,
+                                nx * hxS * invH + ny * hyS * invH + nz * hzS * invH), gloss);
+                        }
+                        cR = lR * specS; cG = lG * specS; cB = lB * specS;
+                        break;
+
+                    case ShadingMode.PhongBlinn:
+                        float diffB = float.Max(0f, nx * lDirX + ny * lDirY + nz * lDirZ);
+                        float dRB = lR * oR * diffB, dGB = lG * oG * diffB, dBB = lB * oB * diffB;
+
+                        float hxB = lDirX + vx, hyB = lDirY + vy, hzB = lDirZ + vz;
+                        float hLenB = float.Sqrt(hxB * hxB + hyB * hyB + hzB * hzB);
+                        float specB = 0f;
+                        if (hLenB > 1e-7f)
+                        {
+                            float invH = 1f / hLenB;
+                            specB = float.Pow(float.Max(0f,
+                                nx * hxB * invH + ny * hyB * invH + nz * hzB * invH), gloss);
+                        }
+                        float sRB = lR * specB, sGB = lG * specB, sBB = lB * specB;
+
+                        cR = ambR + dRB + sRB;
+                        cG = ambG + dGB + sGB;
+                        cB = ambB + dBB + sBB;
+                        break;
+
+                    case ShadingMode.Phong:
+                        float dotNL = nx * lDirX + ny * lDirY + nz * lDirZ;
+                        float diffP = float.Max(0f, dotNL);
+                        float dRP = lR * oR * diffP, dGP = lG * oG * diffP, dBP = lB * oB * diffP;
+
+                        float rx = 2f * dotNL * nx - lDirX;
+                        float ry = 2f * dotNL * ny - lDirY;
+                        float rz = 2f * dotNL * nz - lDirZ;
+                        float dotRV = float.Max(0f, rx * vx + ry * vy + rz * vz);
+                        float specP = float.Pow(dotRV, gloss);
+                        float sRP = lR * specP, sGP = lG * specP, sBP = lB * specP;
+
+                        cR = ambR + dRP + sRP;
+                        cG = ambG + dGP + sGP;
+                        cB = ambB + dBP + sBP;
+                        break;
+
+                    default:
+                        cR = ambR; cG = ambG; cB = ambB;
+                        break;
+                }
+
+                SetPixelAfterZTest(rowBase + x, z, Vec3ToColor(cR, cG, cB));
+
+                w0 += dw0_dx;
+                w1 += dw1_dx;
+                w2 += dw2_dx;
             }
-            w0_row += dw0_dy; w1_row += dw1_dy; w2_row += dw2_dy;
+
+            w0_row += dw0_dy;
+            w1_row += dw1_dy;
+            w2_row += dw2_dy;
         }
     }
 
-    // ─────────────────────────────────────────────────────────────────
-    //  Z-тест отдельно от записи (для early-out)
-    // ─────────────────────────────────────────────────────────────────
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private bool ZTest(int idx, float zNew)
     {
         long  oldVal  = Volatile.Read(ref _zColor[idx]);
@@ -318,7 +355,6 @@ public sealed class Rasterizer
     }
 
     // Запись после того, как ZTest вернул true
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void SetPixelAfterZTest(int idx, float zNew, uint color)
     {
         int  newZBits = BitConverter.SingleToInt32Bits(zNew);
@@ -334,8 +370,6 @@ public sealed class Rasterizer
         }
     }
 
-    // Оригинальный TrySetPixel — используется в DrawTriangle (flat)
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void TrySetPixel(int idx, float zNew, uint color)
     {
         int  newZBits = BitConverter.SingleToInt32Bits(zNew);
@@ -351,25 +385,21 @@ public sealed class Rasterizer
         }
     }
 
-    // ─────────────────────────────────────────────────────────────────
-    //  Вспомогательные
-    // ─────────────────────────────────────────────────────────────────
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+
+    // Проверка принадлежности пикселя треугольнику
     private static bool InsideTriangle(float w0, float w1, float w2,
                                        bool tl0, bool tl1, bool tl2)
         => (w0 > 0f || (w0 == 0f && tl0))
         && (w1 > 0f || (w1 == 0f && tl1))
         && (w2 > 0f || (w2 == 0f && tl2));
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+
     private static float Edge(Vec3 a, Vec3 b, float px, float py)
         => (b.X - a.X) * (py - a.Y) - (b.Y - a.Y) * (px - a.X);
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static float Edge(Vec3 a, Vec3 b, Vec3 c)
         => (b.X - a.X) * (c.Y - a.Y) - (b.Y - a.Y) * (c.X - a.X);
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static bool IsTopLeft(Vec3 a, Vec3 b)
     {
         float dy = b.Y - a.Y, dx = b.X - a.X;
@@ -393,8 +423,7 @@ public sealed class Rasterizer
         ((c >>  8) & 0xFF) / 255f,
         ( c        & 0xFF) / 255f);
 
-    // Без new Vec3 — сразу в uint
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+
     public static uint Vec3ToColor(float r, float g, float b)
     {
         int ri = int.Clamp((int)(r * 255f), 0, 255);

@@ -13,6 +13,7 @@ public class Render
 
     private Vec3[]  _screenFilled = Array.Empty<Vec3>();
     private Vec3[]  _worldFilled  = Array.Empty<Vec3>();
+    private float[] _invWFilled   = Array.Empty<float>();
     private bool[]  _visFilled    = Array.Empty<bool>();
     private Vec3[]  _vertexNormals = Array.Empty<Vec3>();
 
@@ -21,9 +22,6 @@ public class Render
 
     public Render(AvaloniaRender buffer) => _buffer = buffer;
 
-    // ──────────────────────────────────────────────────────────────
-    //  Wireframe
-    // ──────────────────────────────────────────────────────────────
     public void DrawWireframe(ObjModel? model, Matrix44 modelMat,
         Matrix44 viewMat, Matrix44 projMat, uint lineColor = 0xFFC4F8FF)
     {
@@ -91,9 +89,7 @@ public class Render
         }
     }
 
-    // ──────────────────────────────────────────────────────────────
-    //  Filled
-    // ──────────────────────────────────────────────────────────────
+
     public void DrawFilled(ObjModel? model, Matrix44 modelMat, Matrix44 viewMat,
         Matrix44 projMat, Vec3 eye, LightSettings light)
     {
@@ -113,7 +109,6 @@ public class Render
         int vertCount = verts.Count;
         EnsureFilledBuffers(vertCount);
 
-        // Трансформация вершин
         Parallel.For(0, vertCount, i =>
         {
             Vec4 world = modelMat.Multiply(new Vec4(verts[i], 1f));
@@ -122,15 +117,20 @@ public class Render
             Vec4 clip = mvp.Multiply(new Vec4(verts[i], 1f));
             if (clip.W > 1e-5f)
             {
+                _invWFilled[i] = 1f / clip.W;
+                
                 Vec3 ndc = clip.PerspectiveDivide();
                 Vec4 sv  = viewport.Multiply(new Vec4(ndc, 1f));
                 _screenFilled[i] = new Vec3(sv.X, sv.Y, ndc.Z);
                 _visFilled[i]    = true;
             }
-            else _visFilled[i] = false;
+            else
+            {
+                _invWFilled[i] = 0f;
+                _visFilled[i]  = false;
+            }
         });
 
-        // Нормализуем направление света один раз
         Vec3 normLight = light.Direction.Normalized();
 
         for (int fi = 0; fi < model.Faces.Count; fi++)
@@ -147,7 +147,7 @@ public class Render
                 (uint)idx1    >= (uint)vertCount ||
                 (uint)idx2    >= (uint)vertCount) continue;
 
-            // Back-face culling по геометрической нормали грани
+
             Vec3 wA = _worldFilled[baseIdx];
             Vec3 wB = _worldFilled[idx1];
             Vec3 wC = _worldFilled[idx2];
@@ -189,10 +189,11 @@ public class Render
                         break;
                     }
 
-                    default: // PhongBlinn, Ambient, Diffuse, Specular
+                    default:
                     {
                         _rasterizer.DrawTrianglePhong(
                             sA, sB, sC,
+                            _invWFilled[baseIdx], _invWFilled[iB], _invWFilled[iC], // 1/w
                             _vertexNormals[baseIdx], _vertexNormals[iB], _vertexNormals[iC],
                             _worldFilled[baseIdx],   _worldFilled[iB],   _worldFilled[iC],
                             eye, normLight, light);
@@ -205,10 +206,7 @@ public class Render
         _rasterizer.FlushToPixels(_buffer.GetRawBuffer());
     }
 
-    // ──────────────────────────────────────────────────────────────
-    //  Blinn-Phong per-vertex (для Gouraud)
-    //  Без new Vec3 в горячем пути — возвращаем Vec3 по значению
-    // ──────────────────────────────────────────────────────────────
+
     private Vec3 BlinnPhongVertex(int vi, Vec3 eye, Vec3 lightDir, LightSettings light)
     {
         Vec3 N = _vertexNormals[vi];
@@ -244,9 +242,6 @@ public class Render
         return new Vec3(r, g, b);
     }
 
-    // ──────────────────────────────────────────────────────────────
-    //  Vertex normals (angle-weighted accumulation)
-    // ──────────────────────────────────────────────────────────────
     private void EnsureVertexNormals(ObjModel model)
     {
         if (ReferenceEquals(model, _lastModel)) return;
@@ -278,9 +273,6 @@ public class Render
             _vertexNormals[i] = _vertexNormals[i].Normalized();
     }
 
-    // ──────────────────────────────────────────────────────────────
-    //  Управление буферами
-    // ──────────────────────────────────────────────────────────────
     private void EnsureVertexBuffers(int vertCount)
     {
         if (_clipVerts.Length < vertCount)
@@ -300,13 +292,12 @@ public class Render
             int cap       = vertCount + 1000;
             _screenFilled = new Vec3[cap];
             _worldFilled  = new Vec3[cap];
+            _invWFilled   = new float[cap];
             _visFilled    = new bool[cap];
         }
     }
 
-    // ──────────────────────────────────────────────────────────────
-    //  Bresenham / ClipLine — без изменений
-    // ──────────────────────────────────────────────────────────────
+
     private void Bresenham(PixelSet pw, int x0, int y0, int x1, int y1, uint color)
     {
         int dx = Math.Abs(x1 - x0), dy = Math.Abs(y1 - y0);

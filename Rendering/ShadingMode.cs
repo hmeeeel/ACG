@@ -1,7 +1,5 @@
-
-// L / G / P / A / D / S.
-
+// L / G / B / P / A / D / S
 public enum ShadingMode
 {
-    Lambert, Gouraud, PhongBlinn, Ambient, Diffuse, Specular
+    Lambert, Gouraud, PhongBlinn, Phong, Ambient, Diffuse, Specular
 }

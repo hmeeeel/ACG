@@ -86,7 +86,8 @@ public partial class MainWindow : Window
 
                 case Avalonia.Input.Key.L: SetShadingMode(ShadingMode.Lambert);    break;
                 case Avalonia.Input.Key.G: SetShadingMode(ShadingMode.Gouraud);    break;
-                case Avalonia.Input.Key.P: SetShadingMode(ShadingMode.PhongBlinn); break;
+                case Avalonia.Input.Key.B: SetShadingMode(ShadingMode.PhongBlinn); break;
+                case Avalonia.Input.Key.P: SetShadingMode(ShadingMode.Phong);      break;
                 case Avalonia.Input.Key.A: SetShadingMode(ShadingMode.Ambient);    break;
                 case Avalonia.Input.Key.D: SetShadingMode(ShadingMode.Diffuse);    break;
                 case Avalonia.Input.Key.S: SetShadingMode(ShadingMode.Specular);   break;
@@ -103,7 +104,8 @@ public partial class MainWindow : Window
         {
             ShadingMode.Lambert    => "Ламберт [L]",
             ShadingMode.Gouraud    => "Гуро [G]",
-            ShadingMode.PhongBlinn => "Блинн-Фонг [P]",
+            ShadingMode.PhongBlinn => "Блинн-Фонг [B]",
+            ShadingMode.Phong      => "Фонг [P]",
             ShadingMode.Ambient    => "Ambient [A]",
             ShadingMode.Diffuse    => "Diffuse [D]",
             ShadingMode.Specular   => "Specular [S]",

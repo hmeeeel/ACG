@@ -53,7 +53,7 @@ public class Parser
         float u = ParseF(coords[1]);
         float v = coords.Length > 2 ? ParseF(coords[2]) : 0f;
         float w = coords.Length > 3 ? ParseF(coords[3]) : 0f;
-        model.TexCoords.Add(new Vec3(u, v, w));
+        model.TexCoords.Add(new Vec2(u, v));
     }
 
     // vn i j k - нормаль вектора вершины - для плавного освещения - м быть ненорм

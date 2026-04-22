@@ -12,7 +12,7 @@ public sealed class OrbitCamera
 
     // полярный — горизонтальное вращение (0 .. 2π)
     public float Phi    { get; private set; } = 0.5f;
-    private const float PI = 3.14159274f;
+    public const float PI = 3.14159274f;
 
     // зенитный — вертикальное вращение 
     public float Theta  { get; private set; } = PI / 3f; // над Target свреху

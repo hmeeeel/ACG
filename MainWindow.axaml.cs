@@ -11,10 +11,14 @@ namespace ACG;
 
 public partial class MainWindow : Window
 {
-    private readonly AvaloniaRender _avRender = new(1280, 1024);//1280, 1024
+    private readonly AvaloniaRender _avRender = new(1280, 1024);
     private readonly Render         _render;
     private          ObjModel?      _model;
     private readonly OrbitCamera    _camera = new();
+
+    private TextureMap? _diffuseTex;
+    private TextureMap? _normalTex;
+    private TextureMap? _specularTex;
 
     private bool           _dragging;
     private Avalonia.Point _lastMouse;
@@ -22,8 +26,9 @@ public partial class MainWindow : Window
     private int  _rendering = 0;
     private int  _uiPending = 0;
     private volatile bool _dirty = false;
-
-    private readonly System.Diagnostics.Stopwatch _fpsWatch = System.Diagnostics.Stopwatch.StartNew();
+    public const float PI = 3.14159274f;
+    private readonly System.Diagnostics.Stopwatch _fpsWatch =
+        System.Diagnostics.Stopwatch.StartNew();
     private int  _frameCount = 0;
     private bool _filledMode = false;
 
@@ -36,8 +41,11 @@ public partial class MainWindow : Window
         _render = new Render(_avRender);
         RenderCanvas.Source = _avRender.FrontBitmap;
 
-        LoadButton.Click  += OnLoadClick;
-        ResetButton.Click += OnResetClick;
+        LoadButton.Click         += OnLoadClick;
+        LoadDiffuseButton.Click  += OnLoadDiffuseClick;
+        LoadNormalButton.Click   += OnLoadNormalClick;
+        LoadSpecularButton.Click += OnLoadSpecularClick;
+        ResetButton.Click        += OnResetClick;
 
         FilledButton.IsCheckedChanged += (_, _) =>
         {
@@ -54,10 +62,8 @@ public partial class MainWindow : Window
                 _lastMouse = e.GetPosition(CanvasBorder);
             }
         };
-
         CanvasBorder.PointerReleased += (_, _) => _dragging = false;
-
-        CanvasBorder.PointerMoved += (_, e) =>
+        CanvasBorder.PointerMoved   += (_, e) =>
         {
             if (!_dragging) return;
             var pos   = e.GetPosition(CanvasBorder);
@@ -66,7 +72,6 @@ public partial class MainWindow : Window
             _camera.Rotate((float)delta.X, (float)delta.Y);
             RequestRender();
         };
-
         CanvasBorder.PointerWheelChanged += (_, e) =>
         {
             _camera.Zoom((float)e.Delta.Y);
@@ -91,6 +96,12 @@ public partial class MainWindow : Window
                 case Avalonia.Input.Key.A: SetShadingMode(ShadingMode.Ambient);    break;
                 case Avalonia.Input.Key.D: SetShadingMode(ShadingMode.Diffuse);    break;
                 case Avalonia.Input.Key.S: SetShadingMode(ShadingMode.Specular);   break;
+
+                case Avalonia.Input.Key.T:    SetTexMode(TextureMode.Diffuse);  break;
+                case Avalonia.Input.Key.N:    SetTexMode(TextureMode.Normal);   break;
+                case Avalonia.Input.Key.M:    SetTexMode(TextureMode.Specular); break;
+                case Avalonia.Input.Key.O:    SetTexMode(TextureMode.All);      break;
+                case Avalonia.Input.Key.D0:   SetTexMode(TextureMode.None);     break;
             }
         };
 
@@ -111,6 +122,32 @@ public partial class MainWindow : Window
             ShadingMode.Specular   => "Specular [S]",
             _                      => "?"
         };
+        RequestRender();
+    }
+
+    private void SetTexMode(TextureMode mode)
+    {
+        _light.TexMode = mode;
+        TexModeText.Text = mode switch
+        {
+            TextureMode.None     => "Нет [0]",
+            TextureMode.Diffuse  => "Diffuse [T]",
+            TextureMode.Normal   => "Normal [N]",
+            TextureMode.Specular => "Specular [M]",
+            TextureMode.All      => "Все [O]",
+            _                    => "?"
+        };
+
+        bool warn = mode switch
+        {
+            TextureMode.Diffuse  => _diffuseTex  is null,
+            TextureMode.Normal   => _normalTex   is null,
+            TextureMode.Specular => _specularTex is null,
+            TextureMode.All      => _diffuseTex is null && _normalTex is null
+                                    && _specularTex is null,
+            _                    => false
+        };
+        if (warn) StatusText.Text = " Текстура не загружена";
 
         RequestRender();
     }
@@ -121,15 +158,19 @@ public partial class MainWindow : Window
         if (Interlocked.CompareExchange(ref _rendering, 1, 0) == 0)
         {
             _dirty = false;
-            ScheduleRenderTask(_camera.EyePosition(), _camera.Target, _model);
+            ScheduleRenderTask(
+                _camera.EyePosition(), _camera.Target, _model,
+                _diffuseTex, _normalTex, _specularTex);
         }
     }
 
-    private void ScheduleRenderTask(Vec3 eye, Vec3 target, ObjModel? model)
+    private void ScheduleRenderTask(
+        Vec3 eye, Vec3 target, ObjModel? model,
+        TextureMap? diff, TextureMap? norm, TextureMap? spec)
     {
         Task.Run(() =>
         {
-            RenderFrame(eye, target, model);
+            RenderFrame(eye, target, model, diff, norm, spec);
             _avRender.SwapBuffers();
 
             _frameCount++;
@@ -146,7 +187,9 @@ public partial class MainWindow : Window
             {
                 _dirty = false;
                 if (Interlocked.CompareExchange(ref _rendering, 1, 0) == 0)
-                    ScheduleRenderTask(_camera.EyePosition(), _camera.Target, _model);
+                    ScheduleRenderTask(
+                        _camera.EyePosition(), _camera.Target, _model,
+                        _diffuseTex, _normalTex, _specularTex);
             }
 
             if (Interlocked.CompareExchange(ref _uiPending, 1, 0) == 0)
@@ -160,15 +203,18 @@ public partial class MainWindow : Window
         });
     }
 
-    private void RenderFrame(Vec3 eye, Vec3 target, ObjModel? model)
+    private void RenderFrame(
+        Vec3 eye, Vec3 target, ObjModel? model,
+        TextureMap? diff, TextureMap? norm, TextureMap? spec)
     {
         Matrix44 modelMat = Matrix44.Identity();
         Matrix44 view     = Matrix44.LookAt(eye, target, new Vec3(0f, 1f, 0f));
         float    aspect   = (float)_avRender.Width / _avRender.Height;
-        Matrix44 proj     = Matrix44.Perspective(MathF.PI / 3f, aspect, 1.0f, 100f);//zNear = 1.0 а не 0.1
+        Matrix44 proj     = Matrix44.Perspective(PI / 3f, aspect, 1.0f, 100f);
 
         if (_filledMode)
-            _render.DrawFilled(model, modelMat, view, proj, eye, _light);
+            _render.DrawFilled(model, modelMat, view, proj, eye, _light,
+                               diff, norm, spec);
         else
             _render.DrawWireframe(model, modelMat, view, proj);
     }
@@ -179,7 +225,7 @@ public partial class MainWindow : Window
         {
             Title          = "Открыть .obj",
             AllowMultiple  = false,
-            FileTypeFilter = new[] { new FilePickerFileType("OBJ") { Patterns = new[] { "*.obj" } } }
+            FileTypeFilter = [new FilePickerFileType("OBJ") { Patterns = ["*.obj"] }]
         });
         if (files.Count == 0) return;
         try
@@ -188,10 +234,53 @@ public partial class MainWindow : Window
             StatusText.Text = Path.GetFileName(files[0].Path.LocalPath);
             ResetView();
         }
-        catch (Exception ex)
+        catch (Exception ex) { StatusText.Text = $"Ошибка: {ex.Message}"; }
+    }
+
+    private async void OnLoadDiffuseClick(object? sender, RoutedEventArgs e)
+    {
+        var tex = await LoadTexture("Загрузить диффузную карту");
+        if (tex is null) return;
+        _diffuseTex = tex;
+        StatusText.Text = "Diffuse загружена";
+        RequestRender();
+    }
+
+    private async void OnLoadNormalClick(object? sender, RoutedEventArgs e)
+    {
+        var tex = await LoadTexture("Загрузить карту нормалей");
+        if (tex is null) return;
+        _normalTex = tex;
+        StatusText.Text = "Normal map загружена";
+        RequestRender();
+    }
+
+    private async void OnLoadSpecularClick(object? sender, RoutedEventArgs e)
+    {
+        var tex = await LoadTexture("Загрузить зеркальную карту");
+        if (tex is null) return;
+        _specularTex = tex;
+        StatusText.Text = "Specular загружена";
+        RequestRender();
+    }
+
+    private async Task<TextureMap?> LoadTexture(string title)
+    {
+        var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
         {
-            StatusText.Text = $"Ошибка: {ex.Message}";
-        }
+            Title          = title,
+            AllowMultiple  = false,
+            FileTypeFilter =
+            [
+                new FilePickerFileType("Image")
+                {
+                    Patterns = ["*.png", "*.jpg", "*.jpeg", "*.bmp"]
+                }
+            ]
+        });
+        if (files.Count == 0) return null;
+        try   { return TextureMap.Load(files[0].Path.LocalPath); }
+        catch (Exception ex) { StatusText.Text = $"Ошибка: {ex.Message}"; return null; }
     }
 
     private void OnResetClick(object? sender, RoutedEventArgs e) => ResetView();

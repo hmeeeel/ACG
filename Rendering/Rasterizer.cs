@@ -7,7 +7,7 @@ public sealed class Rasterizer
     private readonly int _width;
     private readonly int _height;
     private readonly long[] _zColor;
-    private float[] _invWBuffer;    
+    
     private static readonly long ZColorClear = ((long)BitConverter.SingleToInt32Bits(float.MaxValue) << 32) | 0u;
 
     public Rasterizer(int width, int height)
@@ -15,14 +15,12 @@ public sealed class Rasterizer
         _width  = width;
         _height = height;
         _zColor = new long[width * height];
-        _invWBuffer = new float[width * height];
     }
 
     public void Clear()
-{
-    Array.Fill(_zColor, ZColorClear);
-    Array.Fill(_invWBuffer, 0f);
-}
+    {
+        Array.Fill(_zColor, ZColorClear);
+    }
 
     public void FlushToPixels(uint[] pixelBuffer)
     {
@@ -34,52 +32,201 @@ public sealed class Rasterizer
         }
     }
 
-    private bool SetupTriangle(
-        ref Vec3 s0, ref Vec3 s1, ref Vec3 s2,
-        out int minX, out int maxX, out int minY, out int maxY,
-        out float invArea,
-        out bool tl0, out bool tl1, out bool tl2,
-        out float dw0_dx, out float dw0_dy,
-        out float dw1_dx, out float dw1_dy,
-        out float dw2_dx, out float dw2_dy,
-        out float w0_row,  out float w1_row,  out float w2_row)
+
+    public void DrawTriangleTextured(
+        Vec3 s0, Vec3 s1, Vec3 s2,
+        in VertexAttributes attr0,
+        in VertexAttributes attr1,
+        in VertexAttributes attr2,
+        Vec3 eye,
+        Vec3 lightDir, 
+        LightSettings light,
+        TextureMap? diffuseTex,
+        TextureMap? normalTex,
+        TextureMap? specularTex)
     {
         float area = Edge(s0, s1, s2);
-        if (float.Abs(area) < 1e-6f)
+        if (float.Abs(area) < 1e-6f) return;
+
+        if (area < 0f)
         {
-            minX = maxX = minY = maxY = 0;
-            invArea = 0f;
-            tl0 = tl1 = tl2 = false;
-            dw0_dx = dw0_dy = dw1_dx = dw1_dy = dw2_dx = dw2_dy = 0f;
-            w0_row = w1_row = w2_row = 0f;
-            return false; // выр
+            (s1, s2) = (s2, s1);
+           // (attr1, attr2) = (attr2, attr1);
+            area = -area;
         }
-        if (area < 0f) { (s1, s2) = (s2, s1); area = -area; }
 
-        invArea = 1f / area;
+        if (!SetupTriangle(
+                ref s0, ref s1, ref s2,
+                out int minX, out int maxX, out int minY, out int maxY,
+                out float invArea,
+                out bool tl0, out bool tl1, out bool tl2,
+                out float dw0_dx, out float dw0_dy,
+                out float dw1_dx, out float dw1_dy,
+                out float dw2_dx, out float dw2_dy,
+                out float w0_row, out float w1_row, out float w2_row))
+            return;
 
-        minX = int.Max(0,          (int)float.Floor  (float.Min(s0.X, float.Min(s1.X, s2.X))));
-        maxX = int.Min(_width - 1, (int)float.Ceiling(float.Max(s0.X, float.Max(s1.X, s2.X))));
-        minY = int.Max(0,          (int)float.Floor  (float.Min(s0.Y, float.Min(s1.Y, s2.Y))));
-        maxY = int.Min(_height - 1,(int)float.Ceiling(float.Max(s0.Y, float.Max(s1.Y, s2.Y))));
+        float lR = light.Color.X, lG = light.Color.Y, lB = light.Color.Z;
+        float aR = light.AmbientColor.X, aG = light.AmbientColor.Y, aB = light.AmbientColor.Z;
+        float gloss  = light.Glossiness;
+        float lDirX  = lightDir.X, lDirY = lightDir.Y, lDirZ = lightDir.Z;
 
-        tl0 = IsTopLeft(s1, s2);
-        tl1 = IsTopLeft(s2, s0);
-        tl2 = IsTopLeft(s0, s1);
+        Vec3 objColor = ColorToVec3(light.ObjectColor);
 
-        dw0_dx = s1.Y - s2.Y;  dw0_dy = s2.X - s1.X;
-        dw1_dx = s2.Y - s0.Y;  dw1_dy = s0.X - s2.X;
-        dw2_dx = s0.Y - s1.Y;  dw2_dy = s1.X - s0.X;
+        bool hasDiffuse  = diffuseTex  != null && light.TexMode != TextureMode.None;
+        bool hasNormal   = normalTex   != null &&
+                          (light.TexMode == TextureMode.Normal ||
+                           light.TexMode == TextureMode.All);
+        bool hasSpecular = specularTex != null &&
+                          (light.TexMode == TextureMode.Specular ||
+                           light.TexMode == TextureMode.All);
 
-        float px0 = minX + 0.5f, py0 = minY + 0.5f;
-        w0_row = Edge(s1, s2, px0, py0);
-        w1_row = Edge(s2, s0, px0, py0);
-        w2_row = Edge(s0, s1, px0, py0);
+        float eyeX = eye.X, eyeY = eye.Y, eyeZ = eye.Z;
 
-        return true;
+
+        for (int y = minY; y <= maxY; y++)
+        {
+            float w0 = w0_row, w1 = w1_row, w2 = w2_row;
+            int rowBase = y * _width;
+
+            for (int x = minX; x <= maxX; x++)
+            {
+                if (!InsideTriangle(w0, w1, w2, tl0, tl1, tl2))
+                {
+                    w0 += dw0_dx; w1 += dw1_dx; w2 += dw2_dx;
+                    continue;
+                }
+
+                float b0 = w0 * invArea;
+                float b1 = w1 * invArea;
+                float b2 = w2 * invArea;
+
+                float z = b0 * s0.Z + b1 * s1.Z + b2 * s2.Z;
+
+                if (!ZTest(rowBase + x, z))
+                {
+                    w0 += dw0_dx; w1 += dw1_dx; w2 += dw2_dx;
+                    continue;
+                }
+
+                // ПЕРСПЕКТИВНАЯ КОРРЕКЦИЯ
+                VertexAttributes.InterpolatePerspectiveCorrect(
+                    b0, b1, b2,
+                    in attr0, in attr1, in attr2,
+                    out float invW, out float wCorr,
+                    out Vec2 uv, out Vec3 normal, out Vec3 worldPos);
+
+                
+                float nx, ny, nz;
+                
+                if (hasNormal)
+                {
+                    // Object-space normal map: RGB - XYZ
+                    // N = normalize(texColor * 2 - 1)
+                    Vec3 nt = normalTex!.SampleBilinear(uv.U, uv.V);
+                    nx = nt.X * 2f - 1f;
+                    ny = nt.Y * 2f - 1f;
+                    nz = nt.Z * 2f - 1f;
+                }
+                else
+                {
+                    nx = normal.X;
+                    ny = normal.Y;
+                    nz = normal.Z;
+                }
+
+                // Нормализация нормали
+                float nLen = float.Sqrt(nx * nx + ny * ny + nz * nz);
+                if (nLen > 1e-7f)
+                {
+                    float invN = 1f / nLen;
+                    nx *= invN; ny *= invN; nz *= invN;
+                }
+
+                // ВЕКТОР ВЗГЛЯДА (view direction)
+                float vx = eyeX - worldPos.X;
+                float vy = eyeY - worldPos.Y;
+                float vz = eyeZ - worldPos.Z;
+                float vLen = float.Sqrt(vx * vx + vy * vy + vz * vz);
+                if (vLen > 1e-7f)
+                {
+                    float invV = 1f / vLen;
+                    vx *= invV; vy *= invV; vz *= invV;
+                }
+
+                // ДИФФУЗНЫЙ ЦВЕТ: из текстуры или ObjectColor
+                float oR, oG, oB;
+                
+                if (hasDiffuse &&
+                    (light.TexMode == TextureMode.Diffuse ||
+                     light.TexMode == TextureMode.All     ||
+                     light.TexMode == TextureMode.Normal  ||
+                     light.TexMode == TextureMode.Specular))
+                {
+                    Vec3 diffuse = diffuseTex!.SampleBilinear(uv.U, uv.V);
+                    oR = diffuse.X;
+                    oG = diffuse.Y;
+                    oB = diffuse.Z;
+                }
+                else
+                {
+                    oR = objColor.X;
+                    oG = objColor.Y;
+                    oB = objColor.Z;
+                }
+
+                // ОСВЕЩЕНИЕ БЛИНН-ФОНГА
+                
+                // AMBIENT: Ia = ka * ia
+                float cR = oR * aR;
+                float cG = oG * aG;
+                float cB = oB * aB;
+
+                // DIFFUSE: Id = kd * max(0, N*L) * id
+                float dotNL = float.Max(0f, nx * lDirX + ny * lDirY + nz * lDirZ);
+                cR += lR * oR * dotNL;
+                cG += lG * oG * dotNL;
+                cB += lB * oB * dotNL;
+
+                // SPECULAR: Is = ks * pow(max(0, H·N), gloss) * is
+                // H = normalize(L + V) - Blinn-Phong half-vector
+                float hx = lDirX + vx;
+                float hy = lDirY + vy;
+                float hz = lDirZ + vz;
+                float hLen = float.Sqrt(hx * hx + hy * hy + hz * hz);
+                
+                if (hLen > 1e-7f)
+                {
+                    float invH = 1f / hLen;
+                    hx *= invH; hy *= invH; hz *= invH;
+
+                    float dotHN = float.Max(0f, nx * hx + ny * hy + nz * hz);
+                    float spec  = float.Pow(dotHN, gloss);
+
+                    // ks из зеркальной карты или 1.0
+                    float ks = hasSpecular
+                        ? specularTex!.SampleGrayscale(uv.U, uv.V)
+                        : 1f;
+
+                    cR += lR * ks * spec;
+                    cG += lG * ks * spec;
+                    cB += lB * ks * spec;
+                }
+
+                // Запись пикселя с clamping
+                SetPixelAfterZTest(rowBase + x, z,
+                    Vec3ToColor(
+                        float.Min(cR, 1f),
+                        float.Min(cG, 1f),
+                        float.Min(cB, 1f)));
+
+                w0 += dw0_dx; w1 += dw1_dx; w2 += dw2_dx;
+            }
+
+            w0_row += dw0_dy; w1_row += dw1_dy; w2_row += dw2_dy;
+        }
     }
 
-    // цвет на весь треугольник
     public void DrawTriangle(Vec3 s0, Vec3 s1, Vec3 s2, uint color)
     {
         if (!SetupTriangle(
@@ -96,7 +243,7 @@ public sealed class Rasterizer
         for (int y = minY; y <= maxY; y++)
         {
             float w0 = w0_row, w1 = w1_row, w2 = w2_row;
-            int   rowBase = y * _width;
+            int rowBase = y * _width;
             for (int x = minX; x <= maxX; x++)
             {
                 if (InsideTriangle(w0, w1, w2, tl0, tl1, tl2))
@@ -111,14 +258,13 @@ public sealed class Rasterizer
         }
     }
 
-    // интерполяция цвета по вершинам
     public void DrawTriangleGouraud(
         Vec3 s0, Vec3 s1, Vec3 s2,
         Vec3 c0, Vec3 c1, Vec3 c2)
     {
         float area = Edge(s0, s1, s2);
         if (float.Abs(area) < 1e-6f) return;
-        if (area < 0f) { (s1, s2) = (s2, s1); (c1, c2) = (c2, c1); area = -area; }
+        if (area < 0f) { (s1, s2) = (s2, s1); (c1, c2) = (c2, c1); }
 
         if (!SetupTriangle(
                 ref s0, ref s1, ref s2,
@@ -134,7 +280,7 @@ public sealed class Rasterizer
         for (int y = minY; y <= maxY; y++)
         {
             float w0 = w0_row, w1 = w1_row, w2 = w2_row;
-            int   rowBase = y * _width;
+            int rowBase = y * _width;
             for (int x = minX; x <= maxX; x++)
             {
                 if (!InsideTriangle(w0, w1, w2, tl0, tl1, tl2))
@@ -146,7 +292,7 @@ public sealed class Rasterizer
                 float b0 = w0 * invArea, b1 = w1 * invArea, b2 = w2 * invArea;
                 float z  = b0 * s0.Z + b1 * s1.Z + b2 * s2.Z;
 
-                if (!ZTest(rowBase + x, z)) //!!
+                if (!ZTest(rowBase + x, z))
                 {
                     w0 += dw0_dx; w1 += dw1_dx; w2 += dw2_dx;
                     continue;
@@ -163,8 +309,6 @@ public sealed class Rasterizer
         }
     }
 
-    //  Phong: R = reflect(-L, N), specular = pow(dot(R, V), gloss)
-    //  Blinn-Phong: H = norm(V + L), specular = pow(dot(H, N), gloss)
     public void DrawTrianglePhong(
         Vec3 s0, Vec3 s1, Vec3 s2,
         float invW0, float invW1, float invW2,
@@ -178,10 +322,10 @@ public sealed class Rasterizer
 
         if (area < 0f)
         {
-            (s1, s2)       = (s2, s1);
+            (s1, s2) = (s2, s1);
             (invW1, invW2) = (invW2, invW1);
-            (n1, n2)       = (n2, n1);
-            (wp1, wp2)     = (wp2, wp1);
+            (n1, n2) = (n2, n1);
+            (wp1, wp2) = (wp2, wp1);
         }
 
         if (!SetupTriangle(
@@ -207,9 +351,7 @@ public sealed class Rasterizer
 
         for (int y = minY; y <= maxY; y++)
         {
-            float w0 = w0_row;
-            float w1 = w1_row;
-            float w2 = w2_row;
+            float w0 = w0_row, w1 = w1_row, w2 = w2_row;
             int rowBase = y * _width;
 
             for (int x = minX; x <= maxX; x++)
@@ -220,9 +362,7 @@ public sealed class Rasterizer
                     continue;
                 }
 
-                float b0 = w0 * invArea;
-                float b1 = w1 * invArea;
-                float b2 = w2 * invArea;
+                float b0 = w0 * invArea, b1 = w1 * invArea, b2 = w2 * invArea;
                 float z = b0 * s0.Z + b1 * s1.Z + b2 * s2.Z;
 
                 if (!ZTest(rowBase + x, z))
@@ -253,9 +393,7 @@ public sealed class Rasterizer
                 float py = pc0 * wp0.Y + pc1 * wp1.Y + pc2 * wp2.Y;
                 float pz = pc0 * wp0.Z + pc1 * wp1.Z + pc2 * wp2.Z;
 
-                float vx = eye.X - px;
-                float vy = eye.Y - py;
-                float vz = eye.Z - pz;
+                float vx = eye.X - px, vy = eye.Y - py, vz = eye.Z - pz;
                 float vLen = float.Sqrt(vx * vx + vy * vy + vz * vz);
                 if (vLen > 1e-7f)
                 {
@@ -267,14 +405,14 @@ public sealed class Rasterizer
 
                 switch (mode)
                 {
-                    case ShadingMode.Ambient:// objColor * ambientColor
+                    case ShadingMode.Ambient:
                         cR = ambR; cG = ambG; cB = ambB;
                         break;
 
                     case ShadingMode.Diffuse: // LightColor * objColor * max(0, dot(N, -L))
                         float diffD = float.Max(0f, nx * lDirX + ny * lDirY + nz * lDirZ);
-                        cR = lR * oR * diffD;
-                        cG = lG * oG * diffD;
+                        cR = lR * oR * diffD; 
+                        cG = lG * oG * diffD; 
                         cB = lB * oB * diffD;
                         break;
 
@@ -306,9 +444,7 @@ public sealed class Rasterizer
                         }
                         float sRB = lR * specB, sGB = lG * specB, sBB = lB * specB;
 
-                        cR = ambR + dRB + sRB;
-                        cG = ambG + dGB + sGB;
-                        cB = ambB + dBB + sBB;
+                        cR = ambR + dRB + sRB; cG = ambG + dGB + sGB; cB = ambB + dBB + sBB;
                         break;
 
                     case ShadingMode.Phong:
@@ -323,9 +459,7 @@ public sealed class Rasterizer
                         float specP = float.Pow(dotRV, gloss);
                         float sRP = lR * specP, sGP = lG * specP, sBP = lB * specP;
 
-                        cR = ambR + dRP + sRP;
-                        cG = ambG + dGP + sGP;
-                        cB = ambB + dBP + sBP;
+                        cR = ambR + dRP + sRP; cG = ambG + dGP + sGP; cB = ambB + dBP + sBP;
                         break;
 
                     default:
@@ -335,64 +469,63 @@ public sealed class Rasterizer
 
                 SetPixelAfterZTest(rowBase + x, z, Vec3ToColor(cR, cG, cB));
 
-                w0 += dw0_dx;
-                w1 += dw1_dx;
-                w2 += dw2_dx;
+                w0 += dw0_dx; w1 += dw1_dx; w2 += dw2_dx;
             }
 
-            w0_row += dw0_dy;
-            w1_row += dw1_dy;
-            w2_row += dw2_dy;
+            w0_row += dw0_dy; w1_row += dw1_dy; w2_row += dw2_dy;
         }
     }
 
-    private bool ZTest(int idx, float zNew)
+    private bool SetupTriangle(
+        ref Vec3 s0, ref Vec3 s1, ref Vec3 s2,
+        out int minX, out int maxX, out int minY, out int maxY,
+        out float invArea,
+        out bool tl0, out bool tl1, out bool tl2,
+        out float dw0_dx, out float dw0_dy,
+        out float dw1_dx, out float dw1_dy,
+        out float dw2_dx, out float dw2_dy,
+        out float w0_row, out float w1_row, out float w2_row)
     {
-        long  oldVal  = Volatile.Read(ref _zColor[idx]);
-        int   oldZB   = (int)(oldVal >> 32);
-        float oldZ    = BitConverter.Int32BitsToSingle(oldZB);
-        return zNew < oldZ;   // true = пиксель прошёл тест
-    }
-
-    // Запись после того, как ZTest вернул true
-    private void SetPixelAfterZTest(int idx, float zNew, uint color)
-    {
-        int  newZBits = BitConverter.SingleToInt32Bits(zNew);
-        long newVal   = ((long)newZBits << 32) | color;
-        while (true)
+        float area = Edge(s0, s1, s2);
+        if (float.Abs(area) < 1e-6f)
         {
-            long oldVal  = _zColor[idx];
-            int  oldZB   = (int)(oldVal >> 32);
-            float oldZ   = BitConverter.Int32BitsToSingle(oldZB);
-            if (zNew >= oldZ) return;
-            if (Interlocked.CompareExchange(ref _zColor[idx], newVal, oldVal) == oldVal)
-                return;
+            minX = maxX = minY = maxY = 0;
+            invArea = 0f;
+            tl0 = tl1 = tl2 = false;
+            dw0_dx = dw0_dy = dw1_dx = dw1_dy = dw2_dx = dw2_dy = 0f;
+            w0_row = w1_row = w2_row = 0f;
+            return false;
         }
+        if (area < 0f) { (s1, s2) = (s2, s1); area = -area; }
+
+        invArea = 1f / area;
+
+        minX = int.Max(0, (int)float.Floor(float.Min(s0.X, float.Min(s1.X, s2.X))));
+        maxX = int.Min(_width - 1, (int)float.Ceiling(float.Max(s0.X, float.Max(s1.X, s2.X))));
+        minY = int.Max(0, (int)float.Floor(float.Min(s0.Y, float.Min(s1.Y, s2.Y))));
+        maxY = int.Min(_height - 1, (int)float.Ceiling(float.Max(s0.Y, float.Max(s1.Y, s2.Y))));
+
+        tl0 = IsTopLeft(s1, s2);
+        tl1 = IsTopLeft(s2, s0);
+        tl2 = IsTopLeft(s0, s1);
+
+        dw0_dx = s1.Y - s2.Y; dw0_dy = s2.X - s1.X;
+        dw1_dx = s2.Y - s0.Y; dw1_dy = s0.X - s2.X;
+        dw2_dx = s0.Y - s1.Y; dw2_dy = s1.X - s0.X;
+
+        float px0 = minX + 0.5f, py0 = minY + 0.5f;
+        w0_row = Edge(s1, s2, px0, py0);
+        w1_row = Edge(s2, s0, px0, py0);
+        w2_row = Edge(s0, s1, px0, py0);
+
+        return true;
     }
 
-    private void TrySetPixel(int idx, float zNew, uint color)
-    {
-        int  newZBits = BitConverter.SingleToInt32Bits(zNew);
-        long newVal   = ((long)newZBits << 32) | color;
-        while (true)
-        {
-            long  oldVal  = _zColor[idx];
-            int   oldZB   = (int)(oldVal >> 32);
-            float oldZ    = BitConverter.Int32BitsToSingle(oldZB);
-            if (zNew >= oldZ) return;
-            if (Interlocked.CompareExchange(ref _zColor[idx], newVal, oldVal) == oldVal)
-                return;
-        }
-    }
-
-
-    // Проверка принадлежности пикселя треугольнику
     private static bool InsideTriangle(float w0, float w1, float w2,
                                        bool tl0, bool tl1, bool tl2)
         => (w0 > 0f || (w0 == 0f && tl0))
         && (w1 > 0f || (w1 == 0f && tl1))
         && (w2 > 0f || (w2 == 0f && tl2));
-
 
     private static float Edge(Vec3 a, Vec3 b, float px, float py)
         => (b.X - a.X) * (py - a.Y) - (b.Y - a.Y) * (px - a.X);
@@ -406,29 +539,68 @@ public sealed class Rasterizer
         return dy < 0f || (dy == 0f && dx > 0f);
     }
 
+    private bool ZTest(int idx, float zNew)
+    {
+        long oldVal = Volatile.Read(ref _zColor[idx]);
+        int oldZB = (int)(oldVal >> 32);
+        float oldZ = BitConverter.Int32BitsToSingle(oldZB);
+        return zNew < oldZ;
+    }
+
+    private void SetPixelAfterZTest(int idx, float zNew, uint color)
+    {
+        int newZBits = BitConverter.SingleToInt32Bits(zNew);
+        long newVal = ((long)newZBits << 32) | color;
+        while (true)
+        {
+            long oldVal = _zColor[idx];
+            int oldZB = (int)(oldVal >> 32);
+            float oldZ = BitConverter.Int32BitsToSingle(oldZB);
+            if (zNew >= oldZ) return;
+            if (Interlocked.CompareExchange(ref _zColor[idx], newVal, oldVal) == oldVal)
+                return;
+        }
+    }
+
+    private void TrySetPixel(int idx, float zNew, uint color)
+    {
+        int newZBits = BitConverter.SingleToInt32Bits(zNew);
+        long newVal = ((long)newZBits << 32) | color;
+        while (true)
+        {
+            long oldVal = _zColor[idx];
+            int oldZB = (int)(oldVal >> 32);
+            float oldZ = BitConverter.Int32BitsToSingle(oldZB);
+            if (zNew >= oldZ) return;
+            if (Interlocked.CompareExchange(ref _zColor[idx], newVal, oldVal) == oldVal)
+                return;
+        }
+    }
+
     public static uint Shade(uint objColor, Vec3 lightColor, float lambert)
     {
         float r = ((objColor >> 16) & 0xFF) * lightColor.X * lambert;
-        float g = ((objColor >>  8) & 0xFF) * lightColor.Y * lambert;
-        float b = ( objColor        & 0xFF) * lightColor.Z * lambert;
-        uint  a = (objColor >> 24) & 0xFF;
+        float g = ((objColor >> 8) & 0xFF) * lightColor.Y * lambert;
+        float b = (objColor & 0xFF) * lightColor.Z * lambert;
+        uint a = (objColor >> 24) & 0xFF;
         return (a << 24)
             | (Math.Clamp((uint)r, 0, 255) << 16)
-            | (Math.Clamp((uint)g, 0, 255) <<  8)
-            |  Math.Clamp((uint)b, 0, 255);
+            | (Math.Clamp((uint)g, 0, 255) << 8)
+            | Math.Clamp((uint)b, 0, 255);
     }
-
     public static Vec3 ColorToVec3(uint c) => new(
         ((c >> 16) & 0xFF) / 255f,
-        ((c >>  8) & 0xFF) / 255f,
-        ( c        & 0xFF) / 255f);
-
+        ((c >> 8) & 0xFF) / 255f,
+        (c & 0xFF) / 255f);
 
     public static uint Vec3ToColor(float r, float g, float b)
     {
-        int ri = int.Clamp((int)(r * 255f), 0, 255);
-        int gi = int.Clamp((int)(g * 255f), 0, 255);
-        int bi = int.Clamp((int)(b * 255f), 0, 255);
+        int ri = (int)(r * 255f);
+        int gi = (int)(g * 255f);
+        int bi = (int)(b * 255f);
+        ri = int.Clamp(ri, 0, 255);
+        gi = int.Clamp(gi, 0, 255);
+        bi = int.Clamp(bi, 0, 255);
         return (0xFFu << 24) | ((uint)ri << 16) | ((uint)gi << 8) | (uint)bi;
     }
 

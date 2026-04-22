@@ -8,19 +8,18 @@ public sealed class AvaloniaRender
     public int Width  { get; }
     public int Height { get; }
 
-    // WriteableBitmap — изменяемый массив, наследуемый от BitmapSource (only read)
     private readonly WriteableBitmap _bitmap;
     private readonly uint[] _backBuffer;
 
     public WriteableBitmap FrontBitmap => _bitmap;
 
-    public AvaloniaRender(int width, int height) // пиксель
+    public uint[] GetRawBuffer() => _backBuffer;
+
+    public AvaloniaRender(int width, int height)
     {
         Width  = width;
         Height = height;
 
-    
-        //WriteableBitmap(PixelSize size, Vector dpi, PixelFormat? format = null, AlphaFormat? alphaFormat = null)
         _bitmap = new WriteableBitmap(
             new PixelSize(width, height),
             new Vector(96, 96),
@@ -30,10 +29,7 @@ public sealed class AvaloniaRender
         _backBuffer = new uint[width * height];
     }
 
-    public void Clear(uint color = 0xFF0E035F)
-    {
-        Array.Fill(_backBuffer, color);
-    }
+    public void Clear(uint color = 0xFF0E035F) => Array.Fill(_backBuffer, color);
 
     public PixelSet GetPixelSet() => new PixelSet(_backBuffer, Width, Height);
 

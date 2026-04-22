@@ -11,29 +11,29 @@ namespace ACG;
 
 public partial class MainWindow : Window
 {
-    private readonly AvaloniaRender _avRender = new(800, 600);
+    private readonly AvaloniaRender _avRender = new(400, 300);//1280, 1024
     private readonly Render         _render;
     private          ObjModel?      _model;
     private readonly OrbitCamera    _camera = new();
 
     private bool           _dragging;
     private Avalonia.Point _lastMouse;
-    
-    private int _rendering = 0;
-    private int _uiPending = 0; 
+
+    private int  _rendering = 0;
+    private int  _uiPending = 0;
     private volatile bool _dirty = false;
 
-    private readonly System.Diagnostics.Stopwatch _fpsWatch =  System.Diagnostics.Stopwatch.StartNew();
-    private int _frameCount = 0;
+    private readonly System.Diagnostics.Stopwatch _fpsWatch = System.Diagnostics.Stopwatch.StartNew();
+    private int  _frameCount = 0;
     private bool _filledMode = false;
-    
+
     private LightSettings _light = LightSettings.Default;
+
     public MainWindow()
     {
         InitializeComponent();
 
         _render = new Render(_avRender);
-
         RenderCanvas.Source = _avRender.FrontBitmap;
 
         LoadButton.Click  += OnLoadClick;
@@ -60,11 +60,9 @@ public partial class MainWindow : Window
         CanvasBorder.PointerMoved += (_, e) =>
         {
             if (!_dragging) return;
-
             var pos   = e.GetPosition(CanvasBorder);
             var delta = pos - _lastMouse;
             _lastMouse = pos;
-
             _camera.Rotate((float)delta.X, (float)delta.Y);
             RequestRender();
         };
@@ -85,7 +83,31 @@ public partial class MainWindow : Window
                 case Avalonia.Input.Key.Down:  _camera.Rotate(0f,  20f); RequestRender(); break;
                 case Avalonia.Input.Key.D1:    _camera.Zoom( 1f);        RequestRender(); break;
                 case Avalonia.Input.Key.D2:    _camera.Zoom(-1f);        RequestRender(); break;
+
+                case Avalonia.Input.Key.L: SetShadingMode(ShadingMode.Lambert);    break;
+                case Avalonia.Input.Key.G: SetShadingMode(ShadingMode.Gouraud);    break;
+                case Avalonia.Input.Key.P: SetShadingMode(ShadingMode.PhongBlinn); break;
+                case Avalonia.Input.Key.A: SetShadingMode(ShadingMode.Ambient);    break;
+                case Avalonia.Input.Key.D: SetShadingMode(ShadingMode.Diffuse);    break;
+                case Avalonia.Input.Key.S: SetShadingMode(ShadingMode.Specular);   break;
             }
+        };
+
+        RequestRender();
+    }
+
+    private void SetShadingMode(ShadingMode mode)
+    {
+        _light.Mode = mode;
+        ModeText.Text = mode switch
+        {
+            ShadingMode.Lambert    => "Ламберт [L]",
+            ShadingMode.Gouraud    => "Гуро [G]",
+            ShadingMode.PhongBlinn => "Блинн-Фонг [P]",
+            ShadingMode.Ambient    => "Ambient [A]",
+            ShadingMode.Diffuse    => "Diffuse [D]",
+            ShadingMode.Specular   => "Specular [S]",
+            _                      => "?"
         };
 
         RequestRender();
@@ -94,7 +116,6 @@ public partial class MainWindow : Window
     private void RequestRender()
     {
         _dirty = true;
-
         if (Interlocked.CompareExchange(ref _rendering, 1, 0) == 0)
         {
             _dirty = false;
@@ -110,16 +131,12 @@ public partial class MainWindow : Window
             _avRender.SwapBuffers();
 
             _frameCount++;
-            if (_fpsWatch.ElapsedMilliseconds >= 500) 
+            if (_fpsWatch.ElapsedMilliseconds >= 500)
             {
                 double fps = _frameCount * 1000.0 / _fpsWatch.ElapsedMilliseconds;
                 _frameCount = 0;
                 _fpsWatch.Restart();
-
-                Dispatcher.UIThread.Post(() =>
-                {
-                    FpsText.Text = $"{fps:F0} fps";
-                });
+                Dispatcher.UIThread.Post(() => FpsText.Text = $"{fps:F0} fps");
             }
 
             Interlocked.Exchange(ref _rendering, 0);
@@ -127,9 +144,7 @@ public partial class MainWindow : Window
             {
                 _dirty = false;
                 if (Interlocked.CompareExchange(ref _rendering, 1, 0) == 0)
-                {
                     ScheduleRenderTask(_camera.EyePosition(), _camera.Target, _model);
-                }
             }
 
             if (Interlocked.CompareExchange(ref _uiPending, 1, 0) == 0)
@@ -138,7 +153,6 @@ public partial class MainWindow : Window
                 {
                     Interlocked.Exchange(ref _uiPending, 0);
                     RenderCanvas.InvalidateVisual();
-
                 }, DispatcherPriority.Render);
             }
         });
@@ -148,13 +162,12 @@ public partial class MainWindow : Window
     {
         Matrix44 modelMat = Matrix44.Identity();
         Matrix44 view     = Matrix44.LookAt(eye, target, new Vec3(0f, 1f, 0f));
+        float    aspect   = (float)_avRender.Width / _avRender.Height;
+        Matrix44 proj     = Matrix44.Perspective(MathF.PI / 3f, aspect, 1.0f, 100f);//zNear = 1.0 а не 0.1
 
-        float    aspect = (float)_avRender.Width / _avRender.Height;
-        Matrix44 proj   = Matrix44.Perspective(MathF.PI / 3f, aspect, 0.1f, 100f);
-        Vec3 lightColor = new Vec3(1f, 1f, 1f);
         if (_filledMode)
-           _render.DrawFilled(model, modelMat, view, proj, eye, _light);
-            else
+            _render.DrawFilled(model, modelMat, view, proj, eye, _light);
+        else
             _render.DrawWireframe(model, modelMat, view, proj);
     }
 
@@ -164,14 +177,9 @@ public partial class MainWindow : Window
         {
             Title          = "Открыть .obj",
             AllowMultiple  = false,
-            FileTypeFilter = new[]
-            {
-                new FilePickerFileType("OBJ") { Patterns = new[] { "*.obj" } }
-            }
+            FileTypeFilter = new[] { new FilePickerFileType("OBJ") { Patterns = new[] { "*.obj" } } }
         });
-
         if (files.Count == 0) return;
-
         try
         {
             _model          = new Parser().Parse(files[0].Path.LocalPath);

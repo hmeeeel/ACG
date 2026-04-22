@@ -16,7 +16,7 @@ public struct Vec4
 
     public readonly Vec3 PerspectiveDivide()
     {
-        if (MathF.Abs(W) < 1e-7f) return new Vec3(X, Y, Z);
+        if (float.Abs(W) < 1e-7f) return new Vec3(X, Y, Z);
         return new Vec3(X / W, Y / W, Z / W);
     }
 

@@ -36,6 +36,22 @@
 
         <Rectangle Width="1" Height="22" Fill="#2A2A50" Margin="4,0"/>
 
+        <TextBlock Text="Затенение:"
+                   VerticalAlignment="Center"
+                   Foreground="#666699"
+                   FontSize="12"/>
+
+        <TextBlock x:Name="ModeText"
+                   VerticalAlignment="Center"
+                   Foreground="#BBBBEE"
+                   FontSize="12"
+                   FontWeight="Bold"
+                   MinWidth="120"
+                   ToolTip.Tip="Клавиши (только в заполненном режиме):&#10;L — Ламберт (плоское)&#10;G — Гуро (интерполяция цвета)&#10;P — Блинн-Фонг (интерполяция нормали)&#10;A — только Ambient&#10;D — только Diffuse&#10;S — только Specular"
+                   Text="Ламберт [L]"/>
+
+        <Rectangle Width="1" Height="22" Fill="#2A2A50" Margin="4,0"/>
+
         <TextBlock x:Name="StatusText"
                    VerticalAlignment="Center"
                    Foreground="#8888BB"

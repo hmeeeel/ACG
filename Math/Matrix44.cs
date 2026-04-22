@@ -63,7 +63,7 @@ public struct Matrix44
     public static Matrix44 RotationX(float angle)
     {
         var m = Identity();
-        float c = MathF.Cos(angle), s = MathF.Sin(angle);
+        float c = float.Cos(angle), s = float.Sin(angle);
         m.M11 =  c; m.M12 = -s;
         m.M21 =  s; m.M22 =  c;
         return m;
@@ -72,7 +72,7 @@ public struct Matrix44
     public static Matrix44 RotationY(float angle)
     {
         var m = Identity();
-        float c = MathF.Cos(angle), s = MathF.Sin(angle);
+        float c = float.Cos(angle), s = float.Sin(angle);
         m.M00 =  c; m.M02 =  s;
         m.M20 = -s; m.M22 =  c;
         return m;
@@ -81,7 +81,7 @@ public struct Matrix44
     public static Matrix44 RotationZ(float angle)
     {
         var m = Identity();
-        float c = MathF.Cos(angle), s = MathF.Sin(angle);
+        float c = float.Cos(angle), s = float.Sin(angle);
         m.M00 =  c; m.M01 = -s;
         m.M10 =  s; m.M11 =  c;
         return m;
@@ -128,7 +128,7 @@ public struct Matrix44
     // просмотр - усечен пирамида - чем дальше тем меньше
     public static Matrix44 Perspective(float fovY, float aspect, float zNear, float zFar)
     {
-        float tanHalf = MathF.Tan(fovY * 0.5f);
+        float tanHalf = float.Tan(fovY * 0.5f);
         var m = default(Matrix44);
         m.M00 = 1f / (aspect * tanHalf);
         m.M11 = 1f / tanHalf;

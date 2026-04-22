@@ -9,11 +9,13 @@ public struct LightSettings
 
     public static LightSettings Default => new()
     {
-        Direction    = new Vec3(0.577f, 0.816f, 0.577f),
-        Color        = new Vec3(1f, 1f, 1f),
+        Direction    = new Vec3(-1f, 1f, -1f),
+        Color        = new Vec3(1f,  1f,  1f),
+        //Direction    = new Vec3(0.577f, 0.816f, 0.577f),
+        //Color        = new Vec3(1f, 1f, 1f),
         AmbientColor = new Vec3(0.2f, 0.2f, 0.2f),
         ObjectColor  = 0xFF00FF00, // 0xFFCC3399
-        Glossiness   = 1f,
+        Glossiness   = 64f,
         Mode         = ShadingMode.Lambert
     };
 }

@@ -11,7 +11,7 @@ namespace ACG;
 
 public partial class MainWindow : Window
 {
-    private readonly AvaloniaRender _avRender = new(400, 300);//1280, 1024
+    private readonly AvaloniaRender _avRender = new(1280, 1024);//1280, 1024
     private readonly Render         _render;
     private          ObjModel?      _model;
     private readonly OrbitCamera    _camera = new();

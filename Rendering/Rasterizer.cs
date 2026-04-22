@@ -4,11 +4,12 @@ using System.Threading;
 
 public sealed class Rasterizer
 {
-    private readonly int    _width;
-    private readonly int    _height;
-    private readonly long[] _zColor; // ст z мл цв
+    private readonly int _width;
+    private readonly int _height;
+    private readonly long[] _zColor;
 
-    private static readonly long ZColorClear = ((long)BitConverter.SingleToInt32Bits(float.MaxValue) << 32) | 0u;
+    private static readonly long ZColorClear =
+        ((long)BitConverter.SingleToInt32Bits(float.MaxValue) << 32) | 0u;
 
     public Rasterizer(int width, int height)
     {
@@ -18,107 +19,97 @@ public sealed class Rasterizer
     }
 
     public void Clear() => Array.Fill(_zColor, ZColorClear);
-   /* public void FlushToPixels(uint[] pixelBuffer)
+
+    public void FlushToPixels(uint[] pixelBuffer)
     {
         int len = _width * _height;
         for (int i = 0; i < len; i++)
         {
             long val = _zColor[i];
-            if (val != ZColorClear)
-                pixelBuffer[i] = (uint)(val & 0xFFFF_FFFFu);
-        }
-    }*/
-public void FlushToPixels(uint[] pixelBuffer)
-{
-    int len = _width * _height;
-    for (int i = 0; i < len; i++)
-    {
-        long val = _zColor[i];
-        pixelBuffer[i] = (val == ZColorClear) 
-            ? 0xFF080818  // фон
-            : (uint)(val & 0xFFFF_FFFFu);
-    }
-}
-    /*  // сканир линия
-    public void DrawTriangle(PixelSet pixels, Vec3 s0, Vec3 s1, Vec3 s2, uint color)
-    {
-        // s0 — верхняя вершина, s1 — средняя, s2 — нижняя
-        if (s0.Y > s1.Y) (s0, s1) = (s1, s0);
-        if (s0.Y > s2.Y) (s0, s2) = (s2, s0);
-        if (s1.Y > s2.Y) (s1, s2) = (s2, s1);
-        float totalH = s2.Y - s0.Y;
-        if (totalH < 1e-3f) return;
-        int yMin = Math.Max(0,           (int)MathF.Ceiling(s0.Y));
-        int yMax = Math.Min(_height - 1, (int)MathF.Floor  (s2.Y));
-        for (int y = yMin; y <= yMax; y++)
-        {
-            // по дл ребру
-            float alpha = (y - s0.Y) / totalH;
-            float xL = s0.X + (s2.X - s0.X) * alpha;
-            float zL = s0.Z + (s2.Z - s0.Z) * alpha;
-
-            // корот заканч
-            bool  upper = y < s1.Y; // s0 s1        s1 s2
-            float segH  = upper ? (s1.Y - s0.Y) : (s2.Y - s1.Y);
-            float xS, zS;
-            if (segH < 1e-3f) { xS = upper ? s1.X : s2.X; zS = upper ? s1.Z : s2.Z; }
-            else
-            {
-                float beta = upper ? (y - s0.Y) / segH : (y - s1.Y) / segH;
-                Vec3 vA = upper ? s0 : s1; Vec3 vB = upper ? s1 : s2;
-                xS = vA.X + (vB.X - vA.X) * beta;
-                zS = vA.Z + (vB.Z - vA.Z) * beta;
-            }
-
-            // xL — левая граница, xS — правая
-            if (xL > xS) { (xL, xS) = (xS, xL); (zL, zS) = (zS, zL); }
-            int   xMin = Math.Max(0,         (int)MathF.Ceiling(xL));
-            int   xMax = Math.Min(_width - 1,(int)MathF.Floor  (xS));
-            float span = xS - xL;
-            for (int x = xMin; x <= xMax; x++)
-            {
-                float t = span > 1e-3f ? (x - xL) / span : 0f;
-                float z = zL + (zS - zL) * t;
-                TrySetPixel(y * _width + x, z, color);
-            }
+            pixelBuffer[i] = (val == ZColorClear)
+                ? 0xFF080818u
+                : (uint)(val & 0xFFFF_FFFFu);
         }
     }
-    */
 
-    public void DrawTriangle(Vec3 s0, Vec3 s1, Vec3 s2, uint color)
+    // ─────────────────────────────────────────────────────────────────
+    //  Общая структура Setup — вычисляет AABB, edge-инкременты, 
+    //  стартовые веса. Возвращает false если треугольник вырожден.
+    // ─────────────────────────────────────────────────────────────────
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private bool SetupTriangle(
+        ref Vec3 s0, ref Vec3 s1, ref Vec3 s2,
+        out int minX, out int maxX, out int minY, out int maxY,
+        out float invArea,
+        out bool tl0, out bool tl1, out bool tl2,
+        out float dw0_dx, out float dw0_dy,
+        out float dw1_dx, out float dw1_dy,
+        out float dw2_dx, out float dw2_dy,
+        out float w0_row,  out float w1_row,  out float w2_row)
     {
         float area = Edge(s0, s1, s2);
-        if (float.Abs(area) < 1e-6f) return;
+        if (float.Abs(area) < 1e-6f)
+        {
+            // out-параметры должны быть инициализированы
+            minX = maxX = minY = maxY = 0;
+            invArea = 0f;
+            tl0 = tl1 = tl2 = false;
+            dw0_dx = dw0_dy = dw1_dx = dw1_dy = dw2_dx = dw2_dy = 0f;
+            w0_row = w1_row = w2_row = 0f;
+            return false;
+        }
         if (area < 0f) { (s1, s2) = (s2, s1); area = -area; }
-        float invArea = 1f / area;
 
-        int minX = int.Max(0,           (int)float.Floor  (float.Min(s0.X, float.Min(s1.X, s2.X))));
-        int maxX = int.Min(_width - 1,  (int)float.Ceiling(float.Max(s0.X, float.Max(s1.X, s2.X))));
-        int minY = int.Max(0,           (int)float.Floor  (float.Min(s0.Y, float.Min(s1.Y, s2.Y))));
-        int maxY = int.Min(_height - 1, (int)float.Ceiling(float.Max(s0.Y, float.Max(s1.Y, s2.Y))));
+        invArea = 1f / area;
 
-        bool tl0 = IsTopLeft(s1, s2), tl1 = IsTopLeft(s2, s0), tl2 = IsTopLeft(s0, s1);
+        minX = int.Max(0,          (int)float.Floor  (float.Min(s0.X, float.Min(s1.X, s2.X))));
+        maxX = int.Min(_width - 1, (int)float.Ceiling(float.Max(s0.X, float.Max(s1.X, s2.X))));
+        minY = int.Max(0,          (int)float.Floor  (float.Min(s0.Y, float.Min(s1.Y, s2.Y))));
+        maxY = int.Min(_height - 1,(int)float.Ceiling(float.Max(s0.Y, float.Max(s1.Y, s2.Y))));
 
-        float dw0_dx = s1.Y - s2.Y, dw0_dy = s2.X - s1.X;
-        float dw1_dx = s2.Y - s0.Y, dw1_dy = s0.X - s2.X;
-        float dw2_dx = s0.Y - s1.Y, dw2_dy = s1.X - s0.X;
+        tl0 = IsTopLeft(s1, s2);
+        tl1 = IsTopLeft(s2, s0);
+        tl2 = IsTopLeft(s0, s1);
+
+        dw0_dx = s1.Y - s2.Y;  dw0_dy = s2.X - s1.X;
+        dw1_dx = s2.Y - s0.Y;  dw1_dy = s0.X - s2.X;
+        dw2_dx = s0.Y - s1.Y;  dw2_dy = s1.X - s0.X;
 
         float px0 = minX + 0.5f, py0 = minY + 0.5f;
-        float w0_row = Edge(s1, s2, px0, py0);
-        float w1_row = Edge(s2, s0, px0, py0);
-        float w2_row = Edge(s0, s1, px0, py0);
+        w0_row = Edge(s1, s2, px0, py0);
+        w1_row = Edge(s2, s0, px0, py0);
+        w2_row = Edge(s0, s1, px0, py0);
+
+        return true;
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    //  Flat shading — цвет на весь треугольник
+    // ─────────────────────────────────────────────────────────────────
+    public void DrawTriangle(Vec3 s0, Vec3 s1, Vec3 s2, uint color)
+    {
+        if (!SetupTriangle(
+                ref s0, ref s1, ref s2,
+                out int minX, out int maxX, out int minY, out int maxY,
+                out float invArea,
+                out bool tl0, out bool tl1, out bool tl2,
+                out float dw0_dx, out float dw0_dy,
+                out float dw1_dx, out float dw1_dy,
+                out float dw2_dx, out float dw2_dy,
+                out float w0_row, out float w1_row, out float w2_row))
+            return;
 
         for (int y = minY; y <= maxY; y++)
         {
             float w0 = w0_row, w1 = w1_row, w2 = w2_row;
+            int   rowBase = y * _width;
             for (int x = minX; x <= maxX; x++)
             {
-               if ((w0 > 0f || (w0 == 0f && tl0)) && (w1 > 0f || (w1 == 0f && tl1)) && (w2 > 0f || (w2 == 0f && tl2)))
-               // if (w0 >= -1e-5f && w1 >= -1e-5f && w2 >= -1e-5f) 
+                if (InsideTriangle(w0, w1, w2, tl0, tl1, tl2))
                 {
                     float b0 = w0 * invArea, b1 = w1 * invArea, b2 = w2 * invArea;
                     float z  = b0 * s0.Z + b1 * s1.Z + b2 * s2.Z;
-                    TrySetPixel(y * _width + x, z, color);
+                    TrySetPixel(rowBase + x, z, color);
                 }
                 w0 += dw0_dx; w1 += dw1_dx; w2 += dw2_dx;
             }
@@ -126,194 +117,270 @@ public void FlushToPixels(uint[] pixelBuffer)
         }
     }
 
-    //  Гуро — интерполяция цвета
-    public void DrawTriangleGouraud(Vec3 s0, Vec3 s1, Vec3 s2,
-                                    Vec3 c0, Vec3 c1, Vec3 c2)
+    // ─────────────────────────────────────────────────────────────────
+    //  Gouraud — интерполяция цвета по вершинам
+    // ─────────────────────────────────────────────────────────────────
+    public void DrawTriangleGouraud(
+        Vec3 s0, Vec3 s1, Vec3 s2,
+        Vec3 c0, Vec3 c1, Vec3 c2)
     {
+        // При смене winding нужно поменять и атрибуты
         float area = Edge(s0, s1, s2);
         if (float.Abs(area) < 1e-6f) return;
         if (area < 0f) { (s1, s2) = (s2, s1); (c1, c2) = (c2, c1); area = -area; }
-        float invArea = 1f / area;
 
-        int minX = Math.Max(0,           (int)float.Floor  (float.Min(s0.X, float.Min(s1.X, s2.X))));
-        int maxX = Math.Min(_width - 1,  (int)float.Ceiling(float.Max(s0.X, float.Max(s1.X, s2.X))));
-        int minY = Math.Max(0,           (int)float.Floor  (float.Min(s0.Y, float.Min(s1.Y, s2.Y))));
-        int maxY = Math.Min(_height - 1, (int)float.Ceiling(float.Max(s0.Y, float.Max(s1.Y, s2.Y))));
-
-        bool tl0 = IsTopLeft(s1, s2), tl1 = IsTopLeft(s2, s0), tl2 = IsTopLeft(s0, s1);
-
-        float dw0_dx = s1.Y - s2.Y, dw0_dy = s2.X - s1.X;
-        float dw1_dx = s2.Y - s0.Y, dw1_dy = s0.X - s2.X;
-        float dw2_dx = s0.Y - s1.Y, dw2_dy = s1.X - s0.X;
-
-        float px0 = minX + 0.5f, py0 = minY + 0.5f;
-        float w0_row = Edge(s1, s2, px0, py0);
-        float w1_row = Edge(s2, s0, px0, py0);
-        float w2_row = Edge(s0, s1, px0, py0);
+        // Переиспользуем setup без ref-swap атрибутов
+        if (!SetupTriangle(
+                ref s0, ref s1, ref s2,
+                out int minX, out int maxX, out int minY, out int maxY,
+                out float invArea,
+                out bool tl0, out bool tl1, out bool tl2,
+                out float dw0_dx, out float dw0_dy,
+                out float dw1_dx, out float dw1_dy,
+                out float dw2_dx, out float dw2_dy,
+                out float w0_row, out float w1_row, out float w2_row))
+            return;
 
         for (int y = minY; y <= maxY; y++)
         {
             float w0 = w0_row, w1 = w1_row, w2 = w2_row;
+            int   rowBase = y * _width;
             for (int x = minX; x <= maxX; x++)
             {
-                if ((w0 > 0f || (w0 == 0f && tl0))
-                 && (w1 > 0f || (w1 == 0f && tl1))
-                 && (w2 > 0f || (w2 == 0f && tl2)))
+                if (InsideTriangle(w0, w1, w2, tl0, tl1, tl2))
                 {
                     float b0 = w0 * invArea, b1 = w1 * invArea, b2 = w2 * invArea;
                     float z  = b0 * s0.Z + b1 * s1.Z + b2 * s2.Z;
-                    Vec3 c = new(
-                        b0 * c0.X + b1 * c1.X + b2 * c2.X,
-                        b0 * c0.Y + b1 * c1.Y + b2 * c2.Y,
-                        b0 * c0.Z + b1 * c1.Z + b2 * c2.Z);
-                    TrySetPixel(y * _width + x, z, Vec3ToColor(c));
+
+                    // Z-тест ДО вычисления цвета
+                    if (!ZTest(rowBase + x, z)) goto Next;
+
+                    float r = b0 * c0.X + b1 * c1.X + b2 * c2.X;
+                    float g = b0 * c0.Y + b1 * c1.Y + b2 * c2.Y;
+                    float b = b0 * c0.Z + b1 * c1.Z + b2 * c2.Z;
+                    SetPixelAfterZTest(rowBase + x, z, Vec3ToColor(r, g, b));
                 }
+                Next:
                 w0 += dw0_dx; w1 += dw1_dx; w2 += dw2_dx;
             }
             w0_row += dw0_dy; w1_row += dw1_dy; w2_row += dw2_dy;
         }
     }
 
-    // Фонг/Блинн-Фонг — интерполяция нормалей
+    // ─────────────────────────────────────────────────────────────────
+    //  Phong / Blinn-Phong — интерполяция нормалей по пикселям
+    //  Blinn-Phong: specular = pow(dot(H, N), gloss),  H = norm(V - L)
+    //  (L здесь — вектор ОТ фрагмента К источнику, т.е. -lightDir)
+    // ─────────────────────────────────────────────────────────────────
     public void DrawTrianglePhong(
-        Vec3 s0,  Vec3 s1,  Vec3 s2,
-        Vec3 n0,  Vec3 n1,  Vec3 n2,
-        Vec3 w0,  Vec3 w1,  Vec3 w2,
-        Vec3 eye, Vec3 lightDir,
+        Vec3 s0,  Vec3 s1,  Vec3 s2,   // screen-space позиции
+        Vec3 n0,  Vec3 n1,  Vec3 n2,   // vertex normals (world)
+        Vec3 wp0, Vec3 wp1, Vec3 wp2,  // vertex positions (world)
+        Vec3 eye, Vec3 lightDir,       // lightDir = нормализованный вектор К источнику
         LightSettings light)
     {
         float area = Edge(s0, s1, s2);
         if (float.Abs(area) < 1e-6f) return;
         if (area < 0f)
         {
-            (s1, s2) = (s2, s1); (n1, n2) = (n2, n1); (w1, w2) = (w2, w1);
+            (s1, s2)   = (s2, s1);
+            (n1, n2)   = (n2, n1);
+            (wp1, wp2) = (wp2, wp1);
             area = -area;
         }
-        float invArea = 1f / area;
 
-        int minX = Math.Max(0,           (int)float.Floor  (float.Min(s0.X, float.Min(s1.X, s2.X))));
-        int maxX = Math.Min(_width - 1,  (int)float.Ceiling(float.Max(s0.X, float.Max(s1.X, s2.X))));
-        int minY = Math.Max(0,           (int)float.Floor  (float.Min(s0.Y, float.Min(s1.Y, s2.Y))));
-        int maxY = Math.Min(_height - 1, (int)float.Ceiling(float.Max(s0.Y, float.Max(s1.Y, s2.Y))));
+        if (!SetupTriangle(
+                ref s0, ref s1, ref s2,
+                out int minX, out int maxX, out int minY, out int maxY,
+                out float invArea,
+                out bool tl0, out bool tl1, out bool tl2,
+                out float dw0_dx, out float dw0_dy,
+                out float dw1_dx, out float dw1_dy,
+                out float dw2_dx, out float dw2_dy,
+                out float w0_row, out float w1_row, out float w2_row))
+            return;
 
-        bool tl0 = IsTopLeft(s1, s2), tl1 = IsTopLeft(s2, s0), tl2 = IsTopLeft(s0, s1);
-
-        float dw0_dx = s1.Y - s2.Y, dw0_dy = s2.X - s1.X;
-        float dw1_dx = s2.Y - s0.Y, dw1_dy = s0.X - s2.X;
-        float dw2_dx = s0.Y - s1.Y, dw2_dy = s1.X - s0.X;
-
-        float px0 = minX + 0.5f, py0 = minY + 0.5f;
-        float w0_row = Edge(s1, s2, px0, py0);
-        float w1_row = Edge(s2, s0, px0, py0);
-        float w2_row = Edge(s0, s1, px0, py0);
-
+        // Константы вне цикла
         Vec3  objColor   = ColorToVec3(light.ObjectColor);
-        Vec3  ambient    = objColor * light.AmbientColor;
-        float glossiness = light.Glossiness;
+        float oR = objColor.X, oG = objColor.Y, oB = objColor.Z;
+        float lR = light.Color.X, lG = light.Color.Y, lB = light.Color.Z;
+        float aR = light.AmbientColor.X, aG = light.AmbientColor.Y, aB = light.AmbientColor.Z;
+        float gloss = light.Glossiness;
         ShadingMode mode = light.Mode;
+
+        // ambient = objColor * ambientColor  (компонентно)
+        float ambR = oR * aR, ambG = oG * aG, ambB = oB * aB;
+
+        // lightDir = вектор К источнику (нормализован)
+        float lDirX = lightDir.X, lDirY = lightDir.Y, lDirZ = lightDir.Z;
 
         for (int y = minY; y <= maxY; y++)
         {
-            float ew0 = w0_row, ew1 = w1_row, ew2 = w2_row;
+            float w0 = w0_row, w1 = w1_row, w2 = w2_row;
+            int   rowBase = y * _width;
             for (int x = minX; x <= maxX; x++)
             {
-                if ((ew0 > 0f || (ew0 == 0f && tl0))
-                 && (ew1 > 0f || (ew1 == 0f && tl1))
-                 && (ew2 > 0f || (ew2 == 0f && tl2)))
+                if (InsideTriangle(w0, w1, w2, tl0, tl1, tl2))
                 {
-                    float b0 = ew0 * invArea, b1 = ew1 * invArea, b2 = ew2 * invArea;
+                    float b0 = w0 * invArea, b1 = w1 * invArea, b2 = w2 * invArea;
                     float z  = b0 * s0.Z + b1 * s1.Z + b2 * s2.Z;
 
+                    // ── Z-ТЕСТ ДО освещения ──────────────────────────
+                    if (!ZTest(rowBase + x, z)) goto Next;
 
-                    Vec3 N = new Vec3(
-                        b0 * n0.X + b1 * n1.X + b2 * n2.X,
-                        b0 * n0.Y + b1 * n1.Y + b2 * n2.Y,
-                        b0 * n0.Z + b1 * n1.Z + b2 * n2.Z).Normalized();
+                    // ── Интерполяция нормали (без new Vec3) ──────────
+                    float nx = b0 * n0.X + b1 * n1.X + b2 * n2.X;
+                    float ny = b0 * n0.Y + b1 * n1.Y + b2 * n2.Y;
+                    float nz = b0 * n0.Z + b1 * n1.Z + b2 * n2.Z;
+                    // Нормализация
+                    float nLen = float.Sqrt(nx*nx + ny*ny + nz*nz);
+                    if (nLen > 1e-7f) { float inv = 1f/nLen; nx *= inv; ny *= inv; nz *= inv; }
 
-                    Vec3 wPos = new Vec3(
-                        b0 * w0.X + b1 * w1.X + b2 * w2.X,
-                        b0 * w0.Y + b1 * w1.Y + b2 * w2.Y,
-                        b0 * w0.Z + b1 * w1.Z + b2 * w2.Z);
+                    // ── Интерполяция мировой позиции ─────────────────
+                    float px = b0 * wp0.X + b1 * wp1.X + b2 * wp2.X;
+                    float py = b0 * wp0.Y + b1 * wp1.Y + b2 * wp2.Y;
+                    float pz = b0 * wp0.Z + b1 * wp1.Z + b2 * wp2.Z;
 
-                    Vec3 V = (eye - wPos).Normalized();
-                    Vec3 H = (lightDir + V).Normalized();
+                    // ── V = normalize(eye - fragPos) ─────────────────
+                    float vx = eye.X - px, vy = eye.Y - py, vz = eye.Z - pz;
+                    float vLen = float.Sqrt(vx*vx + vy*vy + vz*vz);
+                    if (vLen > 1e-7f) { float inv = 1f/vLen; vx *= inv; vy *= inv; vz *= inv; }
 
-                    Vec3 color;
+                    float cR, cG, cB;
+
                     switch (mode)
                     {
                         case ShadingMode.Ambient:
-                            color = ambient;
+                            cR = ambR; cG = ambG; cB = ambB;
                             break;
+
                         case ShadingMode.Diffuse:
                         {
-                            float diff = float.Max(0f, Vec3.Dot(N, lightDir));
-                            color = light.Color * objColor * diff;
+                            // dot(N, L)  — L = lightDir (к источнику)
+                            float diff = float.Max(0f, nx*lDirX + ny*lDirY + nz*lDirZ);
+                            cR = lR * oR * diff;
+                            cG = lG * oG * diff;
+                            cB = lB * oB * diff;
                             break;
                         }
+
                         case ShadingMode.Specular:
                         {
-                            float spec = float.Pow(float.Max(0f, Vec3.Dot(H, N)), glossiness);
-                            color = light.Color * spec;
+                            // Blinn-Phong: H = normalize(L + V)
+                            float hx = lDirX + vx, hy = lDirY + vy, hz = lDirZ + vz;
+                            float hLen = float.Sqrt(hx*hx + hy*hy + hz*hz);
+                            if (hLen > 1e-7f) { float inv = 1f/hLen; hx *= inv; hy *= inv; hz *= inv; }
+                            float spec = float.Pow(float.Max(0f, nx*hx + ny*hy + nz*hz), gloss);
+                            cR = lR * spec; cG = lG * spec; cB = lB * spec;
                             break;
                         }
-                        default: // PhongBlinn
+
+                        default: // PhongBlinn (ambient + diffuse + specular)
                         {
-                            float diff    = float.Max(0f, Vec3.Dot(N, lightDir));
-                            Vec3 diffuse  = light.Color * objColor * diff;
-                            float spec    = float.Pow(float.Max(0f, Vec3.Dot(H, N)), glossiness);
-                            Vec3 specular = light.Color * spec;
-                           
-                            color = ambient + diffuse + specular;
+                            float diff = float.Max(0f, nx*lDirX + ny*lDirY + nz*lDirZ);
+                            float dR   = lR * oR * diff;
+                            float dG   = lG * oG * diff;
+                            float dB   = lB * oB * diff;
+
+                            // H = normalize(L + V)
+                            float hx = lDirX + vx, hy = lDirY + vy, hz = lDirZ + vz;
+                            float hLen = float.Sqrt(hx*hx + hy*hy + hz*hz);
+                            if (hLen > 1e-7f) { float inv = 1f/hLen; hx *= inv; hy *= inv; hz *= inv; }
+                            float spec = float.Pow(float.Max(0f, nx*hx + ny*hy + nz*hz), gloss);
+                            float sR   = lR * spec, sG = lG * spec, sB = lB * spec;
+
+                            cR = ambR + dR + sR;
+                            cG = ambG + dG + sG;
+                            cB = ambB + dB + sB;
                             break;
                         }
                     }
 
-                    TrySetPixel(y * _width + x, z, Vec3ToColor(color));
+                    SetPixelAfterZTest(rowBase + x, z, Vec3ToColor(cR, cG, cB));
                 }
-                ew0 += dw0_dx; ew1 += dw1_dx; ew2 += dw2_dx;
+                Next:
+                w0 += dw0_dx; w1 += dw1_dx; w2 += dw2_dx;
             }
             w0_row += dw0_dy; w1_row += dw1_dy; w2_row += dw2_dy;
         }
     }
 
-    private void TrySetPixel(int idx, float zNew, uint color)
+    // ─────────────────────────────────────────────────────────────────
+    //  Z-тест отдельно от записи (для early-out)
+    // ─────────────────────────────────────────────────────────────────
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private bool ZTest(int idx, float zNew)
     {
-       int  newZBits = BitConverter.SingleToInt32Bits(zNew);
-        long newVal   = ((long)newZBits << 32) | color;
+        long  oldVal  = Volatile.Read(ref _zColor[idx]);
+        int   oldZB   = (int)(oldVal >> 32);
+        float oldZ    = BitConverter.Int32BitsToSingle(oldZB);
+        return zNew < oldZ;   // true = пиксель прошёл тест
+    }
 
+    // Запись после того, как ZTest вернул true
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void SetPixelAfterZTest(int idx, float zNew, uint color)
+    {
+        int  newZBits = BitConverter.SingleToInt32Bits(zNew);
+        long newVal   = ((long)newZBits << 32) | color;
         while (true)
         {
-           // Console.WriteLine($"Z = {zNew:F6}");
-            long  oldVal = _zColor[idx];
-
-            int oldZBits = (int)(oldVal >> 32);
-            float oldZ = BitConverter.Int32BitsToSingle(oldZBits);
-
+            long oldVal  = _zColor[idx];
+            int  oldZB   = (int)(oldVal >> 32);
+            float oldZ   = BitConverter.Int32BitsToSingle(oldZB);
             if (zNew >= oldZ) return;
             if (Interlocked.CompareExchange(ref _zColor[idx], newVal, oldVal) == oldVal)
                 return;
         }
-
     }
 
+    // Оригинальный TrySetPixel — используется в DrawTriangle (flat)
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void TrySetPixel(int idx, float zNew, uint color)
+    {
+        int  newZBits = BitConverter.SingleToInt32Bits(zNew);
+        long newVal   = ((long)newZBits << 32) | color;
+        while (true)
+        {
+            long  oldVal  = _zColor[idx];
+            int   oldZB   = (int)(oldVal >> 32);
+            float oldZ    = BitConverter.Int32BitsToSingle(oldZB);
+            if (zNew >= oldZ) return;
+            if (Interlocked.CompareExchange(ref _zColor[idx], newVal, oldVal) == oldVal)
+                return;
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    //  Вспомогательные
+    // ─────────────────────────────────────────────────────────────────
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static bool InsideTriangle(float w0, float w1, float w2,
+                                       bool tl0, bool tl1, bool tl2)
+        => (w0 > 0f || (w0 == 0f && tl0))
+        && (w1 > 0f || (w1 == 0f && tl1))
+        && (w2 > 0f || (w2 == 0f && tl2));
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static float Edge(Vec3 a, Vec3 b, float px, float py)
         => (b.X - a.X) * (py - a.Y) - (b.Y - a.Y) * (px - a.X);
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static float Edge(Vec3 a, Vec3 b, Vec3 c)
         => (b.X - a.X) * (c.Y - a.Y) - (b.Y - a.Y) * (c.X - a.X);
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static bool IsTopLeft(Vec3 a, Vec3 b)
     {
         float dy = b.Y - a.Y, dx = b.X - a.X;
         return dy < 0f || (dy == 0f && dx > 0f);
     }
 
-
     public static uint Shade(uint objColor, Vec3 lightColor, float lambert)
     {
         float r = ((objColor >> 16) & 0xFF) * lightColor.X * lambert;
         float g = ((objColor >>  8) & 0xFF) * lightColor.Y * lambert;
-        float b = ((objColor >>  0) & 0xFF) * lightColor.Z * lambert;
+        float b = ( objColor        & 0xFF) * lightColor.Z * lambert;
         uint  a = (objColor >> 24) & 0xFF;
         return (a << 24)
             | (Math.Clamp((uint)r, 0, 255) << 16)
@@ -326,11 +393,15 @@ public void FlushToPixels(uint[] pixelBuffer)
         ((c >>  8) & 0xFF) / 255f,
         ( c        & 0xFF) / 255f);
 
-    public static uint Vec3ToColor(Vec3 c)
+    // Без new Vec3 — сразу в uint
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static uint Vec3ToColor(float r, float g, float b)
     {
-        int r = int.Clamp((int)(c.X * 255f), 0, 255);
-        int g = int.Clamp((int)(c.Y * 255f), 0, 255);
-        int b = int.Clamp((int)(c.Z * 255f), 0, 255);
-        return (0xFFu << 24) | ((uint)r << 16) | ((uint)g << 8) | (uint)b;
+        int ri = int.Clamp((int)(r * 255f), 0, 255);
+        int gi = int.Clamp((int)(g * 255f), 0, 255);
+        int bi = int.Clamp((int)(b * 255f), 0, 255);
+        return (0xFFu << 24) | ((uint)ri << 16) | ((uint)gi << 8) | (uint)bi;
     }
+
+    public static uint Vec3ToColor(Vec3 c) => Vec3ToColor(c.X, c.Y, c.Z);
 }

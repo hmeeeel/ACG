@@ -35,9 +35,9 @@ public sealed class Rasterizer
 
     public void DrawTriangleTextured(
         Vec3 s0, Vec3 s1, Vec3 s2,
-        in VertexAttributes attr0,
-        in VertexAttributes attr1,
-        in VertexAttributes attr2,
+         VertexAttributes attr0,
+         VertexAttributes attr1,
+         VertexAttributes attr2,
         Vec3 eye,
         Vec3 lightDir, 
         LightSettings light,
@@ -51,7 +51,7 @@ public sealed class Rasterizer
         if (area < 0f)
         {
             (s1, s2) = (s2, s1);
-           // (attr1, attr2) = (attr2, attr1);
+            (attr1, attr2) = (attr2, attr1);
             area = -area;
         }
 
@@ -429,7 +429,7 @@ public sealed class Rasterizer
                         cR = lR * specS; cG = lG * specS; cB = lB * specS;
                         break;
 
-                    case ShadingMode.PhongBlinn:
+                    case ShadingMode.PhongBlinn:  //H = normalize(L + V) spec = pow(H*N, gloss)
                         float diffB = float.Max(0f, nx * lDirX + ny * lDirY + nz * lDirZ);
                         float dRB = lR * oR * diffB, dGB = lG * oG * diffB, dBB = lB * oB * diffB;
 
@@ -447,7 +447,7 @@ public sealed class Rasterizer
                         cR = ambR + dRB + sRB; cG = ambG + dGB + sGB; cB = ambB + dBB + sBB;
                         break;
 
-                    case ShadingMode.Phong:
+                    case ShadingMode.Phong: // R = 2*(N*L)*N - L spec = pow(R*V, gloss)
                         float dotNL = nx * lDirX + ny * lDirY + nz * lDirZ;
                         float diffP = float.Max(0f, dotNL);
                         float dRP = lR * oR * diffP, dGP = lG * oG * diffP, dBP = lB * oB * diffP;
@@ -541,7 +541,7 @@ public sealed class Rasterizer
 
     private bool ZTest(int idx, float zNew)
     {
-        long oldVal = Volatile.Read(ref _zColor[idx]);
+        long oldVal = _zColor[idx];
         int oldZB = (int)(oldVal >> 32);
         float oldZ = BitConverter.Int32BitsToSingle(oldZB);
         return zNew < oldZ;
@@ -580,13 +580,15 @@ public sealed class Rasterizer
     public static uint Shade(uint objColor, Vec3 lightColor, float lambert)
     {
         float r = ((objColor >> 16) & 0xFF) * lightColor.X * lambert;
-        float g = ((objColor >> 8) & 0xFF) * lightColor.Y * lambert;
-        float b = (objColor & 0xFF) * lightColor.Z * lambert;
-        uint a = (objColor >> 24) & 0xFF;
-        return (a << 24)
-            | (Math.Clamp((uint)r, 0, 255) << 16)
-            | (Math.Clamp((uint)g, 0, 255) << 8)
-            | Math.Clamp((uint)b, 0, 255);
+        float g = ((objColor >>  8) & 0xFF) * lightColor.Y * lambert;
+        float b = ( objColor        & 0xFF) * lightColor.Z * lambert;
+        uint  a = (objColor >> 24) & 0xFF;
+
+        uint ri = (uint)r; if (ri > 255) ri = 255;
+        uint gi = (uint)g; if (gi > 255) gi = 255;
+        uint bi = (uint)b; if (bi > 255) bi = 255;
+
+        return (a << 24) | (ri << 16) | (gi << 8) | bi;
     }
     public static Vec3 ColorToVec3(uint c) => new(
         ((c >> 16) & 0xFF) / 255f,

@@ -210,7 +210,7 @@ public partial class MainWindow : Window
         Matrix44 modelMat = Matrix44.Identity();
         Matrix44 view     = Matrix44.LookAt(eye, target, new Vec3(0f, 1f, 0f));
         float    aspect   = (float)_avRender.Width / _avRender.Height;
-        Matrix44 proj     = Matrix44.Perspective(PI / 3f, aspect, 1.0f, 100f);
+        Matrix44 proj     = Matrix44.Perspective(PI / 3f, aspect, 0.3f, 50f);
 
         if (_filledMode)
             _render.DrawFilled(model, modelMat, view, proj, eye, _light,

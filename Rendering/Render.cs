@@ -127,9 +127,6 @@ public class Render
             if (clip.W > 1e-5f)
             {
 
-                // Делим текстурные координаты на соответствующую глубину z
-                // (положительное расстояние от камеры до точки в пространстве наблюдателя).
-                // Нужно сохранить 1/w вместо единицы (4-я координата).
                 _invWFilled[i] = 1f / clip.W;
 
                 Vec3 ndc = clip.PerspectiveDivide();
@@ -150,14 +147,17 @@ public class Render
 
 
         // РАСТЕРИЗАЦИЯ ГРАНЕЙ
-        for (int fi = 0; fi < model.Faces.Count; fi++)
+        Parallel.For(0, model.Faces.Count, fi => 
+        //for (int fi = 0; fi < model.Faces.Count; fi++)
         {
             var face = model.Faces[fi];
             int faceVerts = face.Vertices.Count;
-            if (faceVerts < 3) continue;
+           // if (faceVerts < 3) continue;
+            if (faceVerts < 3) return;
 
             int baseIdx = face.Vertices[0].v;
-            if ((uint)baseIdx >= (uint)vertCount) continue;
+           // if ((uint)baseIdx >= (uint)vertCount) continue;
+            if ((uint)baseIdx >= (uint)vertCount) return;
 
             // Back-face culling по геометрической нормали
             Vec3 wA = _worldFilled[baseIdx];
@@ -166,7 +166,9 @@ public class Render
             Vec3 faceNormal = Vec3.Cross(wB - wA, wC - wA).Normalized();
             Vec3 centroid = (wA + wB + wC) * (1f / 3f);
             Vec3 viewDir = (eye - centroid).Normalized();
-            if (Vec3.Dot(faceNormal, viewDir) <= 0f) continue;
+           // if (Vec3.Dot(faceNormal, viewDir) <= 0f) continue;
+
+            if (Vec3.Dot(faceNormal, viewDir) <= 0f) return;
 
             // Fan-триангуляция полигона
             for (int i = 1; i < faceVerts - 1; i++)
@@ -200,13 +202,12 @@ public class Render
 
                     _rasterizer.DrawTriangleTextured(
                         sA, sB, sC,
-                        in attr0, in attr1, in attr2,
+                         attr0,  attr1,  attr2,
                         eye, normLight, light,
                         diffuseTex, normalTex, specularTex);
                 }
                 else
                 {
-                    // БЕЗ ТЕКСТУР
                     float iw0 = _invWFilled[vi0];
                     float iw1 = _invWFilled[vi1];
                     float iw2 = _invWFilled[vi2];
@@ -246,13 +247,13 @@ public class Render
                     }
                 }
             }
-        }
-
+        //}
+});
         _rasterizer.FlushToPixels(_buffer.GetRawBuffer());
     }
 
 
-    // Собирает все атрибуты вершины для перспективной коррекции.
+    // Собирает все атрибуты вершины для перспективной коррекции
     private VertexAttributes BuildVertexAttributes(
         ObjModel model,
         (int v, int vt, int vn) faceVertex,
@@ -274,7 +275,6 @@ public class Render
         return model.TexCoords[vtIdx];
     }
 
-    // Получить нормаль: из файла (vn) или усреднённую.
     private Vec3 GetNormal(ObjModel model, int vnIdx, int vertIdx)
     {
         if (vnIdx >= 0 && vnIdx < model.Normals.Count)

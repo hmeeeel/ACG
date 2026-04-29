@@ -99,7 +99,9 @@ public class Render
         Vec3 eye, LightSettings light,
         TextureMap? diffuseTex = null,
         TextureMap? normalTex = null,
-        TextureMap? specularTex = null)
+        TextureMap? specularTex = null,
+        LightSource? lightSource = null,
+        Vec3? ambientColorOverride = null)
     {
         _buffer.Clear(0xFF080818);
         if (model is null) return;
@@ -116,8 +118,7 @@ public class Render
         int vertCount = verts.Count;
         EnsureFilledBuffers(vertCount);
 
-        
-        // ВЕРШИНЫ
+        // ТРАНСФОРМАЦИЯ ВЕРШИН
         Parallel.For(0, vertCount, i =>
         {
             Vec4 world = modelMat.Multiply(new Vec4(verts[i], 1f));
@@ -126,7 +127,6 @@ public class Render
             Vec4 clip = mvp.Multiply(new Vec4(verts[i], 1f));
             if (clip.W > 1e-5f)
             {
-
                 _invWFilled[i] = 1f / clip.W;
 
                 Vec3 ndc = clip.PerspectiveDivide();
@@ -141,36 +141,36 @@ public class Render
             }
         });
 
-        Vec3 normLight = light.Direction.Normalized();
+        Vec3 normLight = lightSource != null
+            ? lightSource.GetLightDirection(Vec3.Zero)
+            : light.Direction.Normalized();
+
+        Vec3 ambientColor = ambientColorOverride ?? light.AmbientColor;
+
         bool useTextures = light.TexMode != TextureMode.None
                            && (diffuseTex != null || normalTex != null || specularTex != null);
 
-
         // РАСТЕРИЗАЦИЯ ГРАНЕЙ
-        Parallel.For(0, model.Faces.Count, fi => 
-        //for (int fi = 0; fi < model.Faces.Count; fi++)
+        Parallel.For(0, model.Faces.Count, fi =>
         {
             var face = model.Faces[fi];
             int faceVerts = face.Vertices.Count;
-           // if (faceVerts < 3) continue;
             if (faceVerts < 3) return;
 
             int baseIdx = face.Vertices[0].v;
-           // if ((uint)baseIdx >= (uint)vertCount) continue;
             if ((uint)baseIdx >= (uint)vertCount) return;
 
-            // Back-face culling по геометрической нормали
+            // Back-face culling
             Vec3 wA = _worldFilled[baseIdx];
             Vec3 wB = _worldFilled[face.Vertices[1].v];
             Vec3 wC = _worldFilled[face.Vertices[2].v];
             Vec3 faceNormal = Vec3.Cross(wB - wA, wC - wA).Normalized();
             Vec3 centroid = (wA + wB + wC) * (1f / 3f);
             Vec3 viewDir = (eye - centroid).Normalized();
-           // if (Vec3.Dot(faceNormal, viewDir) <= 0f) continue;
 
             if (Vec3.Dot(faceNormal, viewDir) <= 0f) return;
 
-            // Fan-триангуляция полигона
+            // Fan-триангуляция
             for (int i = 1; i < faceVerts - 1; i++)
             {
                 int i0 = 0, i1 = i, i2 = i + 1;
@@ -191,20 +191,16 @@ public class Render
 
                 if (useTextures)
                 {
-                    
-                    // Собираем атрибуты вершин для перспективной коррекции
-                    VertexAttributes attr0 = BuildVertexAttributes(
-                        model, face.Vertices[i0], vi0);
-                    VertexAttributes attr1 = BuildVertexAttributes(
-                        model, face.Vertices[i1], vi1);
-                    VertexAttributes attr2 = BuildVertexAttributes(
-                        model, face.Vertices[i2], vi2);
+                    VertexAttributes attr0 = BuildVertexAttributes(model, face.Vertices[i0], vi0);
+                    VertexAttributes attr1 = BuildVertexAttributes(model, face.Vertices[i1], vi1);
+                    VertexAttributes attr2 = BuildVertexAttributes(model, face.Vertices[i2], vi2);
 
                     _rasterizer.DrawTriangleTextured(
                         sA, sB, sC,
-                         attr0,  attr1,  attr2,
+                        attr0, attr1, attr2,
                         eye, normLight, light,
-                        diffuseTex, normalTex, specularTex);
+                        diffuseTex, normalTex, specularTex,
+                        lightSource, ambientColor);
                 }
                 else
                 {
@@ -216,18 +212,16 @@ public class Render
                     {
                         case ShadingMode.Lambert:
                         {
-                            float lambert = float.Max(0f,
-                                Vec3.Dot(faceNormal, normLight));
-                            uint color = Rasterizer.Shade(
-                                light.ObjectColor, light.Color, lambert);
+                            float lambert = float.Max(0f, Vec3.Dot(faceNormal, normLight));
+                            uint color = Rasterizer.Shade(light.ObjectColor, light.Color, lambert);
                             _rasterizer.DrawTriangle(sA, sB, sC, color);
                             break;
                         }
                         case ShadingMode.Gouraud:
                         {
-                            Vec3 c0 = BlinnPhongVertex(vi0, eye, normLight, light);
-                            Vec3 c1 = BlinnPhongVertex(vi1, eye, normLight, light);
-                            Vec3 c2 = BlinnPhongVertex(vi2, eye, normLight, light);
+                            Vec3 c0 = BlinnPhongVertex(vi0, eye, normLight, light, lightSource, ambientColor);
+                            Vec3 c1 = BlinnPhongVertex(vi1, eye, normLight, light, lightSource, ambientColor);
+                            Vec3 c2 = BlinnPhongVertex(vi2, eye, normLight, light, lightSource, ambientColor);
                             _rasterizer.DrawTriangleGouraud(sA, sB, sC, c0, c1, c2);
                             break;
                         }
@@ -241,17 +235,17 @@ public class Render
                                 iw0, iw1, iw2,
                                 n0, n1, n2,
                                 _worldFilled[vi0], _worldFilled[vi1], _worldFilled[vi2],
-                                eye, normLight, light);
+                                eye, normLight, light,
+                                lightSource, ambientColor);
                             break;
                         }
                     }
                 }
             }
-        //}
-});
+        });
+
         _rasterizer.FlushToPixels(_buffer.GetRawBuffer());
     }
-
 
     // Собирает все атрибуты вершины для перспективной коррекции
     private VertexAttributes BuildVertexAttributes(
@@ -284,11 +278,29 @@ public class Render
         return new Vec3(0f, 1f, 0f);
     }
 
-    private Vec3 BlinnPhongVertex(int vi, Vec3 eye, Vec3 lightDir, LightSettings light)
+    private Vec3 BlinnPhongVertex(
+        int vi, Vec3 eye, Vec3 lightDir, LightSettings light,
+        LightSource? lightSource, Vec3 ambientColor)
     {
         Vec3 N = _vertexNormals[vi];
         Vec3 worldPos = _worldFilled[vi];
 
+        // Вектор взгляда
+        Vec3 viewDirVec = (eye - worldPos).Normalized();
+
+        if (lightSource != null)
+        {
+            var material = new Material(
+                Rasterizer.ColorToVec3(light.ObjectColor),
+                1f,
+                light.Glossiness);
+
+            Vec3 lighting = lightSource.ComputeLighting(worldPos, N, viewDirVec, material);
+            Vec3 ambient = material.DiffuseColor * ambientColor;
+            return ambient + lighting;
+        }
+
+        // Legacy режим
         float vx = eye.X - worldPos.X;
         float vy = eye.Y - worldPos.Y;
         float vz = eye.Z - worldPos.Z;
@@ -307,9 +319,9 @@ public class Render
             N.X * hx + N.Y * hy + N.Z * hz), light.Glossiness);
 
         return new Vec3(
-            float.Min(obj.X * light.AmbientColor.X + light.Color.X * obj.X * diff + light.Color.X * spec, 1f),
-            float.Min(obj.Y * light.AmbientColor.Y + light.Color.Y * obj.Y * diff + light.Color.Y * spec, 1f),
-            float.Min(obj.Z * light.AmbientColor.Z + light.Color.Z * obj.Z * diff + light.Color.Z * spec, 1f));
+            float.Min(obj.X * ambientColor.X + light.Color.X * obj.X * diff + light.Color.X * spec, 1f),
+            float.Min(obj.Y * ambientColor.Y + light.Color.Y * obj.Y * diff + light.Color.Y * spec, 1f),
+            float.Min(obj.Z * ambientColor.Z + light.Color.Z * obj.Z * diff + light.Color.Z * spec, 1f));
     }
 
     private void EnsureVertexNormals(ObjModel model)

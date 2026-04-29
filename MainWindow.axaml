@@ -15,61 +15,91 @@
       <StackPanel Orientation="Horizontal" Spacing="8">
 
         <Button x:Name="LoadButton"
-                Content="Открыть .obj"
-                Padding="12,6" Foreground="#8888BB"/>
+                Content=".obj"
+                Padding="12,6" Foreground="#8888BB" FontSize="16"
+                ToolTip.Tip="Загрузить 3D-модель"/>
 
-        <Button x:Name="LoadDiffuseButton"
-                Content="Diffuse"
-                Padding="12,6" Foreground="#8888BB"
-                ToolTip.Tip="PNG/BMP/JPG"/>
+        <Rectangle Width="1" Height="22" Fill="#2A2A50" Margin="4,0"/>
 
-        <Button x:Name="LoadNormalButton"
-                Content="Normal"
-                Padding="12,6" Foreground="#8888BB"
-                ToolTip.Tip="PNG/BMP/JPG"/>
+        <Button x:Name="LoadTexturesButton"
+                Content="Текстуры"
+                Padding="12,6" Foreground="#8888BB" FontSize="16"
+                ToolTip.Tip="Загрузить diffuse/normal/specular"/>
 
-        <Button x:Name="LoadSpecularButton"
-                Content="Specular"
-                Padding="12,6" Foreground="#8888BB"
-                ToolTip.Tip="PNG/BMP/JPG"/>
+        <Border BorderBrush="#333366" BorderThickness="1" 
+                CornerRadius="3" Padding="6,2" Background="#0A0A14">
+          <StackPanel Orientation="Horizontal" Spacing="8">
+            <StackPanel Orientation="Horizontal" Spacing="3">
+              <TextBlock Text="D" FontSize="16" Foreground="#666699" VerticalAlignment="Center"/>
+              <TextBlock x:Name="DiffuseIndicator" Text="-" FontSize="14" 
+                         Foreground="#444466" VerticalAlignment="Center"/>
+            </StackPanel>
+            <TextBlock Text="|" Foreground="#222244" VerticalAlignment="Center"/>
+            <StackPanel Orientation="Horizontal" Spacing="3">
+              <TextBlock Text="N" FontSize="16" Foreground="#666699" VerticalAlignment="Center"/>
+              <TextBlock x:Name="NormalIndicator" Text="-" FontSize="14" 
+                         Foreground="#444466" VerticalAlignment="Center"/>
+            </StackPanel>
+            <TextBlock Text="|" Foreground="#222244" VerticalAlignment="Center"/>
+            <StackPanel Orientation="Horizontal" Spacing="3">
+              <TextBlock Text="S" FontSize="16" Foreground="#666699" VerticalAlignment="Center"/>
+              <TextBlock x:Name="SpecularIndicator" Text="-" FontSize="14" 
+                         Foreground="#444466" VerticalAlignment="Center"/>
+            </StackPanel>
+          </StackPanel>
+        </Border>
+
+        <Rectangle Width="1" Height="22" Fill="#2A2A50" Margin="4,0"/>
+
+        <!-- УПРАВЛЕНИЕ ИСТОЧНИКАМИ СВЕТА -->
+        <TextBlock Text=""
+                   VerticalAlignment="Center"
+                   FontSize="16"/>
+        <ComboBox x:Name="LightTypeCombo"
+                  MinWidth="140"
+                  SelectedIndex="0"
+                  Foreground="#BBBBEE"
+                  Background="#0A0A14"
+                  ToolTip.Tip="Тип источника света">
+          <ComboBoxItem Content="Направленный"/>
+          <ComboBoxItem Content="Точечный"/>
+          <ComboBoxItem Content="Прожектор"/>
+        </ComboBox>
+
 
         <Rectangle Width="1" Height="22" Fill="#2A2A50" Margin="4,0"/>
 
         <Button x:Name="ResetButton"
                 Content="Сброс"
-                Padding="12,6" Foreground="#8888BB"/>
+                Padding="12,6" Foreground="#8888BB" FontSize="16"
+                ToolTip.Tip="Сброс камеры"/>
 
         <ToggleButton x:Name="FilledButton"
-                      Content="Каркас"
-                      Padding="12,6" Foreground="#8888BB"/>
+                      Content="Заполненный"
+                      Padding="12,6" Foreground="#8888BB" FontSize="16"
+                      ToolTip.Tip="Переключение: каркас/заполненный"/>
 
         <Rectangle Width="1" Height="22" Fill="#2A2A50" Margin="4,0"/>
 
-        <TextBlock Text="Шейдинг:"
-                   VerticalAlignment="Center"
-                   Foreground="#666699" FontSize="12"/>
+        <TextBlock Text="Шейдинг:" VerticalAlignment="Center" Foreground="#666699" FontSize="16"/>
         <TextBlock x:Name="ModeText"
                    VerticalAlignment="Center"
-                   Foreground="#BBBBEE" FontSize="12" FontWeight="Bold"
-                   MinWidth="140"
-                   ToolTip.Tip="L=Lambert  G=Гуро  B=Блинн-Фонг  P=Фонг  A=Ambient  D=Diffuse  S=Specular"/>
+                   Foreground="#BBBBEE" FontSize="16" FontWeight="Bold"
+                   MinWidth="100"
+                   ToolTip.Tip="L/G/B/P/A/D/S"/>
 
-        <Rectangle Width="1" Height="22" Fill="#2A2A50" Margin="4,0"/>
-
-        <TextBlock Text="Текстуры:"
-                   VerticalAlignment="Center"
-                   Foreground="#666699" FontSize="12"/>
+        <TextBlock Text="Текстура:" VerticalAlignment="Center" Foreground="#666699" FontSize="16"/>
         <TextBlock x:Name="TexModeText"
                    VerticalAlignment="Center"
-                   Foreground="#BBBBEE" FontSize="12" FontWeight="Bold"
-                   MinWidth="160"
-                   ToolTip.Tip="T=Diffuse  N=Normal  M=Specular  O=Все  0=Без текстур"/>
+                   Foreground="#BBBBEE" FontSize="16" FontWeight="Bold"
+                   MinWidth="90"
+                   ToolTip.Tip="T/N/M/O/0"/>
 
         <Rectangle Width="1" Height="22" Fill="#2A2A50" Margin="4,0"/>
 
         <TextBlock x:Name="StatusText"
                    VerticalAlignment="Center"
-                   Foreground="#8888BB" FontSize="12"/>
+                   Foreground="#8888BB" FontSize="16"/>
       </StackPanel>
     </Border>
 
@@ -84,11 +114,18 @@
                RenderOptions.BitmapInterpolationMode="None"/>
       </Border>
 
+      <!-- ВИЗУАЛИЗАЦИЯ ИСТОЧНИКА СВЕТА -->
+      <Canvas x:Name="LightGizmoCanvas"
+              IsHitTestVisible="False"
+              HorizontalAlignment="Stretch"
+              VerticalAlignment="Stretch"/>
+
+
       <TextBlock x:Name="FpsText"
                  HorizontalAlignment="Right"
                  VerticalAlignment="Top"
                  Margin="0,8,12,0"
-                 Foreground="#8888BB" FontSize="12"
+                 Foreground="#8888BB" FontSize="16"
                  FontFamily="Consolas"
                  IsHitTestVisible="False" Text="0 fps"/>
     </Grid>

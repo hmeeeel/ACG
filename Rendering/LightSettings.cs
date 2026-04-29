@@ -14,7 +14,7 @@ public struct LightSettings
         Color        = new Vec3(1f,  1f,  1f), // new Vec3(1f, 1f, 1f),
         AmbientColor = new Vec3(0.2f, 0.2f, 0.2f),
         ObjectColor  = 0xFF00FF00, // 0xFFCC3399
-        Glossiness   = 64f,
+        Glossiness   = 8f,
         Mode         = ShadingMode.Lambert,
         TexMode      = TextureMode.None
     };

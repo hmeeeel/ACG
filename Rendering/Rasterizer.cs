@@ -32,18 +32,19 @@ public sealed class Rasterizer
         }
     }
 
-
     public void DrawTriangleTextured(
         Vec3 s0, Vec3 s1, Vec3 s2,
-         VertexAttributes attr0,
-         VertexAttributes attr1,
-         VertexAttributes attr2,
+        VertexAttributes attr0,
+        VertexAttributes attr1,
+        VertexAttributes attr2,
         Vec3 eye,
-        Vec3 lightDir, 
+        Vec3 lightDir,
         LightSettings light,
         TextureMap? diffuseTex,
         TextureMap? normalTex,
-        TextureMap? specularTex)
+        TextureMap? specularTex,
+        LightSource? lightSource,
+        Vec3? ambientColorOverride)
     {
         float area = Edge(s0, s1, s2);
         if (float.Abs(area) < 1e-6f) return;
@@ -66,11 +67,11 @@ public sealed class Rasterizer
                 out float w0_row, out float w1_row, out float w2_row))
             return;
 
-        float lR = light.Color.X, lG = light.Color.Y, lB = light.Color.Z;
-        float aR = light.AmbientColor.X, aG = light.AmbientColor.Y, aB = light.AmbientColor.Z;
+        Vec3 ambientColor = ambientColorOverride ?? light.AmbientColor;
+       // float lR = light.Color.X, lG = light.Color.Y, lB = light.Color.Z;
+        //float aR = light.AmbientColor.X, aG = light.AmbientColor.Y, aB = light.AmbientColor.Z;
         float gloss  = light.Glossiness;
-        float lDirX  = lightDir.X, lDirY = lightDir.Y, lDirZ = lightDir.Z;
-
+        //float lDirX  = lightDir.X, lDirY = lightDir.Y, lDirZ = lightDir.Z;
         Vec3 objColor = ColorToVec3(light.ObjectColor);
 
         bool hasDiffuse  = diffuseTex  != null && light.TexMode != TextureMode.None;
@@ -83,7 +84,7 @@ public sealed class Rasterizer
 
         float eyeX = eye.X, eyeY = eye.Y, eyeZ = eye.Z;
 
-
+        // РАСТЕРИЗАЦИЯ
         for (int y = minY; y <= maxY; y++)
         {
             float w0 = w0_row, w1 = w1_row, w2 = w2_row;
@@ -116,13 +117,12 @@ public sealed class Rasterizer
                     out float invW, out float wCorr,
                     out Vec2 uv, out Vec3 normal, out Vec3 worldPos);
 
-                
+                // НОРМАЛЬ
                 float nx, ny, nz;
                 
                 if (hasNormal)
                 {
-                    // Object-space normal map: RGB - XYZ
-                    // N = normalize(texColor * 2 - 1)
+                    // Object-space normal map
                     Vec3 nt = normalTex!.SampleBilinear(uv.U, uv.V);
                     nx = nt.X * 2f - 1f;
                     ny = nt.Y * 2f - 1f;
@@ -135,7 +135,7 @@ public sealed class Rasterizer
                     nz = normal.Z;
                 }
 
-                // Нормализация нормали
+                // Нормализация
                 float nLen = float.Sqrt(nx * nx + ny * ny + nz * nz);
                 if (nLen > 1e-7f)
                 {
@@ -143,7 +143,9 @@ public sealed class Rasterizer
                     nx *= invN; ny *= invN; nz *= invN;
                 }
 
-                // ВЕКТОР ВЗГЛЯДА (view direction)
+                Vec3 normalVec = new Vec3(nx, ny, nz);
+
+                // ВЕКТОР ВЗГЛЯДА
                 float vx = eyeX - worldPos.X;
                 float vy = eyeY - worldPos.Y;
                 float vz = eyeZ - worldPos.Z;
@@ -153,8 +155,9 @@ public sealed class Rasterizer
                     float invV = 1f / vLen;
                     vx *= invV; vy *= invV; vz *= invV;
                 }
+                Vec3 viewDirVec = new Vec3(vx, vy, vz);
 
-                // ДИФФУЗНЫЙ ЦВЕТ: из текстуры или ObjectColor
+                // ДИФФУЗНЫЙ ЦВЕТ
                 float oR, oG, oB;
                 
                 if (hasDiffuse &&
@@ -175,50 +178,77 @@ public sealed class Rasterizer
                     oB = objColor.Z;
                 }
 
-                // ОСВЕЩЕНИЕ БЛИНН-ФОНГА
+                // === ОСВЕЩЕНИЕ ===
+                Vec3 finalColor;
                 
-                // AMBIENT: Ia = ka * ia
-                float cR = oR * aR;
-                float cG = oG * aG;
-                float cB = oB * aB;
-
-                // DIFFUSE: Id = kd * max(0, N*L) * id
-                float dotNL = float.Max(0f, nx * lDirX + ny * lDirY + nz * lDirZ);
-                cR += lR * oR * dotNL;
-                cG += lG * oG * dotNL;
-                cB += lB * oB * dotNL;
-
-                // SPECULAR: Is = ks * pow(max(0, H·N), gloss) * is
-                // H = normalize(L + V) - Blinn-Phong half-vector
-                float hx = lDirX + vx;
-                float hy = lDirY + vy;
-                float hz = lDirZ + vz;
-                float hLen = float.Sqrt(hx * hx + hy * hy + hz * hz);
-                
-                if (hLen > 1e-7f)
+                if (lightSource != null)
                 {
-                    float invH = 1f / hLen;
-                    hx *= invH; hy *= invH; hz *= invH;
-
-                    float dotHN = float.Max(0f, nx * hx + ny * hy + nz * hz);
-                    float spec  = float.Pow(dotHN, gloss);
-
-                    // ks из зеркальной карты или 1.0
                     float ks = hasSpecular
                         ? specularTex!.SampleGrayscale(uv.U, uv.V)
                         : 1f;
 
-                    cR += lR * ks * spec;
-                    cG += lG * ks * spec;
-                    cB += lB * ks * spec;
+                    var material = new Material(
+                        new Vec3(oR, oG, oB),
+                        ks,
+                        gloss);
+
+                    Vec3 lighting = lightSource.ComputeLighting(
+                        worldPos, 
+                        normalVec, 
+                        viewDirVec, 
+                        material);
+
+                    Vec3 ambient = material.DiffuseColor * ambientColor;
+                    finalColor = ambient + lighting;
+                }
+                else
+                {
+                    // LEGACY: Blinn-Phong с directional light
+                    float cR = oR * ambientColor.X;
+                    float cG = oG * ambientColor.Y;
+                    float cB = oB * ambientColor.Z;
+
+                    float lDirX = lightDir.X, lDirY = lightDir.Y, lDirZ = lightDir.Z;
+                    float lR = light.Color.X, lG = light.Color.Y, lB = light.Color.Z;
+
+                    // DIFFUSE
+                    float dotNL = float.Max(0f, nx * lDirX + ny * lDirY + nz * lDirZ);
+                    cR += lR * oR * dotNL;
+                    cG += lG * oG * dotNL;
+                    cB += lB * oB * dotNL;
+
+                    // SPECULAR (Blinn-Phong)
+                    float hx = lDirX + vx;
+                    float hy = lDirY + vy;
+                    float hz = lDirZ + vz;
+                    float hLen = float.Sqrt(hx * hx + hy * hy + hz * hz);
+                    
+                    if (hLen > 1e-7f)
+                    {
+                        float invH = 1f / hLen;
+                        hx *= invH; hy *= invH; hz *= invH;
+
+                        float dotHN = float.Max(0f, nx * hx + ny * hy + nz * hz);
+                        float spec  = float.Pow(dotHN, gloss);
+
+                        float ks = hasSpecular
+                            ? specularTex!.SampleGrayscale(uv.U, uv.V)
+                            : 1f;
+
+                        cR += lR * ks * spec;
+                        cG += lG * ks * spec;
+                        cB += lB * ks * spec;
+                    }
+
+                    finalColor = new Vec3(cR, cG, cB);
                 }
 
-                // Запись пикселя с clamping
+                // Clamping и запись пикселя
                 SetPixelAfterZTest(rowBase + x, z,
                     Vec3ToColor(
-                        float.Min(cR, 1f),
-                        float.Min(cG, 1f),
-                        float.Min(cB, 1f)));
+                        float.Min(finalColor.X, 1f),
+                        float.Min(finalColor.Y, 1f),
+                        float.Min(finalColor.Z, 1f)));
 
                 w0 += dw0_dx; w1 += dw1_dx; w2 += dw2_dx;
             }
@@ -314,8 +344,10 @@ public sealed class Rasterizer
         float invW0, float invW1, float invW2,
         Vec3 n0, Vec3 n1, Vec3 n2,
         Vec3 wp0, Vec3 wp1, Vec3 wp2,
-        Vec3 eye, Vec3 lightDir,
-        LightSettings light)
+        Vec3 eye, Vec3 lightDir, 
+        LightSettings light,
+        LightSource? lightSource = null,
+        Vec3? ambientColorOverride = null)
     {
         float area = Edge(s0, s1, s2);
         if (float.Abs(area) < 1e-6f) return;
@@ -340,15 +372,14 @@ public sealed class Rasterizer
             return;
 
         Vec3 objColor = ColorToVec3(light.ObjectColor);
-        float oR = objColor.X, oG = objColor.Y, oB = objColor.Z;
-        float lR = light.Color.X, lG = light.Color.Y, lB = light.Color.Z;
-        float aR = light.AmbientColor.X, aG = light.AmbientColor.Y, aB = light.AmbientColor.Z;
+        Vec3 ambientColor = ambientColorOverride ?? light.AmbientColor;
         float gloss = light.Glossiness;
         ShadingMode mode = light.Mode;
-
-        float ambR = oR * aR, ambG = oG * aG, ambB = oB * aB;
-        float lDirX = lightDir.X, lDirY = lightDir.Y, lDirZ = lightDir.Z;
-
+        //float oR = objColor.X, oG = objColor.Y, oB = objColor.Z;
+        //float lR = light.Color.X, lG = light.Color.Y, lB = light.Color.Z;
+        //float aR = light.AmbientColor.X, aG = light.AmbientColor.Y, aB = light.AmbientColor.Z;
+        //float ambR = oR * aR, ambG = oG * aG, ambB = oB * aB;
+        //float lDirX = lightDir.X, lDirY = lightDir.Y, lDirZ = lightDir.Z;
         for (int y = minY; y <= maxY; y++)
         {
             float w0 = w0_row, w1 = w1_row, w2 = w2_row;
@@ -371,6 +402,7 @@ public sealed class Rasterizer
                     continue;
                 }
 
+                // Перспективная коррекция
                 float invW = b0 * invW0 + b1 * invW1 + b2 * invW2;
                 float persp = invW > 1e-7f ? 1f / invW : 0f;
 
@@ -389,9 +421,13 @@ public sealed class Rasterizer
                     nx *= invN; ny *= invN; nz *= invN;
                 }
 
+                Vec3 normalVec = new Vec3(nx, ny, nz);
+
                 float px = pc0 * wp0.X + pc1 * wp1.X + pc2 * wp2.X;
                 float py = pc0 * wp0.Y + pc1 * wp1.Y + pc2 * wp2.Y;
                 float pz = pc0 * wp0.Z + pc1 * wp1.Z + pc2 * wp2.Z;
+
+                Vec3 worldPos = new Vec3(px, py, pz);
 
                 float vx = eye.X - px, vy = eye.Y - py, vz = eye.Z - pz;
                 float vLen = float.Sqrt(vx * vx + vy * vy + vz * vz);
@@ -401,73 +437,28 @@ public sealed class Rasterizer
                     vx *= invV; vy *= invV; vz *= invV;
                 }
 
-                float cR, cG, cB;
+                Vec3 viewDirVec = new Vec3(vx, vy, vz);
 
-                switch (mode)
+                Vec3 finalColor;
+
+                if (lightSource != null)
                 {
-                    case ShadingMode.Ambient:
-                        cR = ambR; cG = ambG; cB = ambB;
-                        break;
-
-                    case ShadingMode.Diffuse: // LightColor * objColor * max(0, dot(N, -L))
-                        float diffD = float.Max(0f, nx * lDirX + ny * lDirY + nz * lDirZ);
-                        cR = lR * oR * diffD; 
-                        cG = lG * oG * diffD; 
-                        cB = lB * oB * diffD;
-                        break;
-
-                    case ShadingMode.Specular: // LightColor * pow(max(0, dot(H, N)), gloss)
-                        float hxS = lDirX + vx, hyS = lDirY + vy, hzS = lDirZ + vz;
-                        float hLenS = float.Sqrt(hxS * hxS + hyS * hyS + hzS * hzS);
-                        float specS = 0f;
-                        if (hLenS > 1e-7f)
-                        {
-                            float invH = 1f / hLenS;
-                            specS = float.Pow(float.Max(0f,
-                                nx * hxS * invH + ny * hyS * invH + nz * hzS * invH), gloss);
-                        }
-                        cR = lR * specS; cG = lG * specS; cB = lB * specS;
-                        break;
-
-                    case ShadingMode.PhongBlinn:  //H = normalize(L + V) spec = pow(H*N, gloss)
-                        float diffB = float.Max(0f, nx * lDirX + ny * lDirY + nz * lDirZ);
-                        float dRB = lR * oR * diffB, dGB = lG * oG * diffB, dBB = lB * oB * diffB;
-
-                        float hxB = lDirX + vx, hyB = lDirY + vy, hzB = lDirZ + vz;
-                        float hLenB = float.Sqrt(hxB * hxB + hyB * hyB + hzB * hzB);
-                        float specB = 0f;
-                        if (hLenB > 1e-7f)
-                        {
-                            float invH = 1f / hLenB;
-                            specB = float.Pow(float.Max(0f,
-                                nx * hxB * invH + ny * hyB * invH + nz * hzB * invH), gloss);
-                        }
-                        float sRB = lR * specB, sGB = lG * specB, sBB = lB * specB;
-
-                        cR = ambR + dRB + sRB; cG = ambG + dGB + sGB; cB = ambB + dBB + sBB;
-                        break;
-
-                    case ShadingMode.Phong: // R = 2*(N*L)*N - L spec = pow(R*V, gloss)
-                        float dotNL = nx * lDirX + ny * lDirY + nz * lDirZ;
-                        float diffP = float.Max(0f, dotNL);
-                        float dRP = lR * oR * diffP, dGP = lG * oG * diffP, dBP = lB * oB * diffP;
-
-                        float rx = 2f * dotNL * nx - lDirX;
-                        float ry = 2f * dotNL * ny - lDirY;
-                        float rz = 2f * dotNL * nz - lDirZ;
-                        float dotRV = float.Max(0f, rx * vx + ry * vy + rz * vz);
-                        float specP = float.Pow(dotRV, gloss);
-                        float sRP = lR * specP, sGP = lG * specP, sBP = lB * specP;
-
-                        cR = ambR + dRP + sRP; cG = ambG + dGP + sGP; cB = ambB + dBP + sBP;
-                        break;
-
-                    default:
-                        cR = ambR; cG = ambG; cB = ambB;
-                        break;
+                    // НОВАЯ СИСТЕМА
+                    var material = new Material(objColor, 1f, gloss);
+                    Vec3 lighting = lightSource.ComputeLighting(
+                        worldPos, normalVec, viewDirVec, material);
+                    Vec3 ambient = objColor * ambientColor;
+                    finalColor = ambient + lighting;
+                }
+                else
+                {
+                    // LEGACY
+                    finalColor = ComputeLegacyPhong(
+                        normalVec, worldPos, viewDirVec, eye,
+                        lightDir, light, objColor, ambientColor, gloss, mode);
                 }
 
-                SetPixelAfterZTest(rowBase + x, z, Vec3ToColor(cR, cG, cB));
+                SetPixelAfterZTest(rowBase + x, z, Vec3ToColor(finalColor));
 
                 w0 += dw0_dx; w1 += dw1_dx; w2 += dw2_dx;
             }
@@ -475,6 +466,76 @@ public sealed class Rasterizer
             w0_row += dw0_dy; w1_row += dw1_dy; w2_row += dw2_dy;
         }
     }
+
+    private Vec3 ComputeLegacyPhong(
+        Vec3 normal, Vec3 worldPos, Vec3 viewDir, Vec3 eye,
+        Vec3 lightDir, LightSettings light,
+        Vec3 objColor, Vec3 ambientColor, float gloss, ShadingMode mode)
+    {
+        float nx = normal.X, ny = normal.Y, nz = normal.Z;
+        float vx = viewDir.X, vy = viewDir.Y, vz = viewDir.Z;
+        float lDirX = lightDir.X, lDirY = lightDir.Y, lDirZ = lightDir.Z;
+        float lR = light.Color.X, lG = light.Color.Y, lB = light.Color.Z;
+        float aR = ambientColor.X, aG = ambientColor.Y, aB = ambientColor.Z;
+        float oR = objColor.X, oG = objColor.Y, oB = objColor.Z;
+
+        float ambR = oR * aR, ambG = oG * aG, ambB = oB * aB;
+
+        switch (mode)
+        {
+            case ShadingMode.Ambient:
+                return new Vec3(ambR, ambG, ambB);
+
+            case ShadingMode.Diffuse:
+                float diffD = float.Max(0f, nx * lDirX + ny * lDirY + nz * lDirZ);
+                return new Vec3(lR * oR * diffD, lG * oG * diffD, lB * oB * diffD);
+
+            case ShadingMode.Specular:
+                float hxS = lDirX + vx, hyS = lDirY + vy, hzS = lDirZ + vz;
+                float hLenS = float.Sqrt(hxS * hxS + hyS * hyS + hzS * hzS);
+                float specS = 0f;
+                if (hLenS > 1e-7f)
+                {
+                    float invH = 1f / hLenS;
+                    specS = float.Pow(float.Max(0f,
+                        nx * hxS * invH + ny * hyS * invH + nz * hzS * invH), gloss);
+                }
+                return new Vec3(lR * specS, lG * specS, lB * specS);
+
+            case ShadingMode.PhongBlinn:
+                float diffB = float.Max(0f, nx * lDirX + ny * lDirY + nz * lDirZ);
+                float hxB = lDirX + vx, hyB = lDirY + vy, hzB = lDirZ + vz;
+                float hLenB = float.Sqrt(hxB * hxB + hyB * hyB + hzB * hzB);
+                float specB = 0f;
+                if (hLenB > 1e-7f)
+                {
+                    float invH = 1f / hLenB;
+                    specB = float.Pow(float.Max(0f,
+                        nx * hxB * invH + ny * hyB * invH + nz * hzB * invH), gloss);
+                }
+                return new Vec3(
+                    ambR + lR * oR * diffB + lR * specB,
+                    ambG + lG * oG * diffB + lG * specB,
+                    ambB + lB * oB * diffB + lB * specB);
+
+            case ShadingMode.Phong:
+                float dotNL = nx * lDirX + ny * lDirY + nz * lDirZ;
+                float diffP = float.Max(0f, dotNL);
+                float rx = 2f * dotNL * nx - lDirX;
+                float ry = 2f * dotNL * ny - lDirY;
+                float rz = 2f * dotNL * nz - lDirZ;
+                float dotRV = float.Max(0f, rx * vx + ry * vy + rz * vz);
+                float specP = float.Pow(dotRV, gloss);
+                return new Vec3(
+                    ambR + lR * oR * diffP + lR * specP,
+                    ambG + lG * oG * diffP + lG * specP,
+                    ambB + lB * oB * diffP + lB * specP);
+
+            default:
+                return new Vec3(ambR, ambG, ambB);
+        }
+    }
+
 
     private bool SetupTriangle(
         ref Vec3 s0, ref Vec3 s1, ref Vec3 s2,

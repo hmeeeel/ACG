@@ -1,6 +1,5 @@
 using System;
 
-
 public class DirectionalLight : LightSource
 {
     public Vec3 Direction { get; set; }
@@ -25,23 +24,22 @@ public class DirectionalLight : LightSource
         Vec3 fragmentPos,
         Vec3 normal,
         Vec3 viewDir,
-        Material material)
+        Material material,
+        ShadingMode mode,
+        Vec3 ambientColor)
     {
         Vec3 L = -Direction;
+        Vec3 effectiveLight = Color * Intensity;
 
-        // === DIFFUSE (Lambertian) ===
-        // Id = kd * max(0, N·L) * lightColor
-        float NdotL = float.Max(0f, Vec3.Dot(normal, L));
-        Vec3 diffuse = material.DiffuseColor * (Color * Intensity * NdotL);
-
-        // === SPECULAR (Blinn-Phong) ===
-        // H = normalize(L + V)
-        // Is = ks * pow(max(0, H·N), glossiness) * lightColor
-        Vec3 H = (L + viewDir).Normalized();
-        float HdotN = float.Max(0f, Vec3.Dot(H, normal));
-        float specPower = float.Pow(HdotN, material.Glossiness);
-        Vec3 specular = Color * (Intensity * material.Specular * specPower);
-
-        return diffuse + specular;
+        return LightingHelper.ComputePhongLighting(
+            normal.X, normal.Y, normal.Z,
+            L.X, L.Y, L.Z,
+            viewDir.X, viewDir.Y, viewDir.Z,
+            effectiveLight.X, effectiveLight.Y, effectiveLight.Z,
+            material.DiffuseColor.X, material.DiffuseColor.Y, material.DiffuseColor.Z,
+            ambientColor.X, ambientColor.Y, ambientColor.Z,
+            material.Specular,
+            material.Glossiness,
+            mode);
     }
 }

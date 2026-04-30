@@ -3,6 +3,13 @@ using System.Runtime.CompilerServices;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
 
+public enum TextureWrapMode
+{
+    Repeat,   // x % size
+    Clamp,    // clamp(x, 0, size-1)
+    Mirror    // abs(mod(x-1, 2) - 1)
+}
+
 public sealed class TextureMap
 {
     private readonly uint[] _pixels;
@@ -71,41 +78,34 @@ public sealed class TextureMap
     /// Минификация — далеко, один пиксель накрывает много текселей (муаровые узоры без фильтрации)."
     public Vec3 SampleBilinear(float u, float v)
     {
-        // V-flip: в OBJ v=0 — низ текстуры, в растре строка 0 — верх
         float vFlipped = 1f - v;
 
-        // Тексельные координаты (центр текселя = +0.5)
         float fx = u        * _widthFloat  - 0.5f;
         float fy = vFlipped * _heightFloat - 0.5f;
 
         int x0 = (int)MathF.Floor(fx);
         int y0 = (int)MathF.Floor(fy);
         
-        // Дробные части для интерполяции
+        // Др
         float tx = fx - x0;
         float ty = fy - y0;
 
         int x1 = x0 + 1;
         int y1 = y0 + 1;
 
-        // Wrap (repeat) — оптимизированный для POT текстур
         x0 = WrapCoord(x0, _width,  _widthMask);
         x1 = WrapCoord(x1, _width,  _widthMask);
         y0 = WrapCoord(y0, _height, _heightMask);
         y1 = WrapCoord(y1, _height, _heightMask);
 
-        // Выборка 4 текселей
         uint c00 = _pixels[y0 * _width + x0];
         uint c10 = _pixels[y0 * _width + x1];
         uint c01 = _pixels[y1 * _width + x0];
         uint c11 = _pixels[y1 * _width + x1];
 
-        // Билинейное смешение: сначала по X, потом по Y
         return BilinearBlend(c00, c10, c01, c11, tx, ty);
     }
 
-    /// Выборка grayscale (для specular map).
-    /// Используем стандартную формулу luminance: 0.299R + 0.587G + 0.114B
     public float SampleGrayscale(float u, float v)
     {
         Vec3 c = SampleBilinear(u, v);
@@ -115,18 +115,24 @@ public sealed class TextureMap
 
     private static int WrapCoord(int x, int size, int mask)
     {
-        if (mask >= 0) // power-of-2: битовая маска
+        if (mask >= 0) 
             return x & mask;
         
-        // non-POT: модуль
+        // Repeat
         x %= size;
         return x < 0 ? x + size : x;
+
+      /*
+        Clamp return int.Clamp(x, 0, size - 1);
+        
+        Mirror |mod(x-1, 2*size) - size|
+        int wrapped = ((x % (2 * size)) + 2 * size) % (2 * size);
+        return wrapped >= size ? (2 * size - 1 - wrapped) : wrapped;
+     */
     }
 
     private static bool IsPowerOfTwo(int x) => x > 0 && (x & (x - 1)) == 0;
 
-    /// Распаковка BGRA и билинейное смешение за один проход.
-    /// ОПТИМИЗАЦИЯ: избегаем промежуточных Vec3, работаем с float напрямую.
     private static Vec3 BilinearBlend(uint c00, uint c10, uint c01, uint c11, float tx, float ty)
     {
         const float inv255 = 1f / 255f;
@@ -147,7 +153,6 @@ public sealed class TextureMap
         float g11 = ((c11 >>  8) & 0xFF) * inv255;
         float b11 = ( c11        & 0xFF) * inv255;
 
-        // Билинейное смешение: lerp(lerp(c00, c10, tx), lerp(c01, c11, tx), ty)
         float r = Lerp(Lerp(r00, r10, tx), Lerp(r01, r11, tx), ty);
         float g = Lerp(Lerp(g00, g10, tx), Lerp(g01, g11, tx), ty);
         float b = Lerp(Lerp(b00, b10, tx), Lerp(b01, b11, tx), ty);

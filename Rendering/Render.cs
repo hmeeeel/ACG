@@ -295,7 +295,7 @@ public class Render
                 1f,
                 light.Glossiness);
 
-            Vec3 lighting = lightSource.ComputeLighting(worldPos, N, viewDirVec, material);
+            Vec3 lighting = lightSource.ComputeLighting(worldPos, N, viewDirVec, material, light.Mode, ambientColor);
             Vec3 ambient = material.DiffuseColor * ambientColor;
             return ambient + lighting;
         }

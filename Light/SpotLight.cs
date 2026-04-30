@@ -6,7 +6,6 @@ public class SpotLight : LightSource
     public Vec3 Direction { get; set; }
     public float InnerCutoff { get; set; }
     public float OuterCutoff { get; set; }
-    
     public float Falloff { get; set; } = 1f;
 
     public SpotLight(Vec3 position, Vec3 direction, float innerAngle, float outerAngle)
@@ -28,7 +27,7 @@ public class SpotLight : LightSource
 
     public override Vec3 GetLightDirection(Vec3 fragmentPos)
     {
-        // Так же, как у Point Light — от фрагмента к источнику
+        // Так же, как у Point Light - от фрагмента к источнику
         return (Position - fragmentPos).Normalized();
     }
 
@@ -36,7 +35,9 @@ public class SpotLight : LightSource
         Vec3 fragmentPos,
         Vec3 normal,
         Vec3 viewDir,
-        Material material)
+        Material material,
+        ShadingMode mode,
+        Vec3 ambientColor)
     {
         // Вектор от фрагмента к источнику (не нормализованный)
         Vec3 toLight = Position - fragmentPos;
@@ -45,47 +46,49 @@ public class SpotLight : LightSource
             ? toLight / distance 
             : new Vec3(0f, 1f, 0f);
 
-        // === 1. ЗАТУХАНИЕ С РАССТОЯНИЕМ ===
+//ЗАТУХАНИЕ С РАССТОЯНИЕМ 
         float attenuation = 1f / (distance * distance + 0.01f);
-
-        // === 2. ЗАТУХАНИЕ ПО УГЛУ (spot cone) ===
-       //  ОТ источника К фрагменту
-        float theta = Vec3.Dot(Direction, -L);
         
+         //  ОТ источника К фрагменту
+        float theta = Vec3.Dot(Direction, -L);
         float spotIntensity = ComputeSpotIntensity(theta);
         
         if (spotIntensity <= 0f)
-            return Vec3.Zero;
+        {
+           return material.DiffuseColor * ambientColor;  
+        }
+        
 
-        // === 3. DIFFUSE ===
-        float NdotL = float.Max(0f, Vec3.Dot(normal, L));
-        Vec3 diffuse = material.DiffuseColor * (Color * Intensity * NdotL);
+        Vec3 effectiveLight = Color * Intensity;
 
-        // === 4. SPECULAR ===
-        Vec3 H = (L + viewDir).Normalized();
-        float HdotN = float.Max(0f, Vec3.Dot(H, normal));
-        float specPower = float.Pow(HdotN, material.Glossiness);
-        Vec3 specular = Color * (Intensity * material.Specular * specPower);
+        Vec3 lighting = LightingHelper.ComputePhongLighting(
+            normal.X, normal.Y, normal.Z,
+            L.X, L.Y, L.Z,
+            viewDir.X, viewDir.Y, viewDir.Z,
+            effectiveLight.X, effectiveLight.Y, effectiveLight.Z,
+            material.DiffuseColor.X, material.DiffuseColor.Y, material.DiffuseColor.Z,
+            ambientColor.X, ambientColor.Y, ambientColor.Z,
+            material.Specular,
+            material.Glossiness,
+            mode);
 
-        return attenuation * spotIntensity * (diffuse + specular);
+        if (mode == ShadingMode.Ambient)
+            return lighting;
+
+        Vec3 ambient = material.DiffuseColor * ambientColor;
+        Vec3 litPart = lighting - ambient;
+        return ambient + (litPart * attenuation * spotIntensity);
     }
 
     private float ComputeSpotIntensity(float theta)
     {
-        // За пределами внешнего конуса — темнота
-        if (theta < OuterCutoff)
-            return 0f;
+        if (theta < OuterCutoff) return 0f;
+        if (theta > InnerCutoff) return 1f;
         
-        // Внутри внутреннего конуса — полная яркость
-        if (theta > InnerCutoff)
-            return 1f;
-        
-
         // intensity = (theta - outer) / (inner - outer)
         float epsilon = InnerCutoff - OuterCutoff;
         float intensity = (theta - OuterCutoff) / epsilon;
         
-
         if (Falloff != 1f)
             intensity = float.Pow(intensity, Falloff);
         

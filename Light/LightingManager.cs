@@ -39,27 +39,6 @@ public class LightingManager
         ActiveLight = null;
     }
 
-
-    public Vec3 ComputeTotalLighting(
-        Vec3 fragmentPos,
-        Vec3 normal,
-        Vec3 viewDir,
-        Material material)
-    {
-        Vec3 totalColor = material.DiffuseColor * AmbientColor;
-
-        // Складываем освещение от всех источников
-        foreach (var light in _lights)
-        {
-            totalColor += light.ComputeLighting(
-                fragmentPos, 
-                normal, 
-                viewDir, 
-                material);
-        }
-
-        return totalColor;
-    }
     public Vec3 GetPrimaryLightDirection(Vec3 fragmentPos)
     {
         if (_lights.Count == 0)

@@ -68,10 +68,7 @@ public sealed class Rasterizer
             return;
 
         Vec3 ambientColor = ambientColorOverride ?? light.AmbientColor;
-       // float lR = light.Color.X, lG = light.Color.Y, lB = light.Color.Z;
-        //float aR = light.AmbientColor.X, aG = light.AmbientColor.Y, aB = light.AmbientColor.Z;
-        float gloss  = light.Glossiness;
-        //float lDirX  = lightDir.X, lDirY = lightDir.Y, lDirZ = lightDir.Z;
+        float gloss = light.Glossiness;
         Vec3 objColor = ColorToVec3(light.ObjectColor);
 
         bool hasDiffuse  = diffuseTex  != null && light.TexMode != TextureMode.None;
@@ -178,72 +175,48 @@ public sealed class Rasterizer
                     oB = objColor.Z;
                 }
 
-                // === ОСВЕЩЕНИЕ ===
+                float ks = hasSpecular
+                    ? specularTex!.SampleGrayscale(uv.U, uv.V)
+                    : 1f;
+
                 Vec3 finalColor;
                 
                 if (lightSource != null)
                 {
-                    float ks = hasSpecular
-                        ? specularTex!.SampleGrayscale(uv.U, uv.V)
-                        : 1f;
-
                     var material = new Material(
                         new Vec3(oR, oG, oB),
                         ks,
                         gloss);
 
-                    Vec3 lighting = lightSource.ComputeLighting(
+                    finalColor = lightSource.ComputeLighting(
                         worldPos, 
                         normalVec, 
                         viewDirVec, 
-                        material);
+                        material,
+                        light.Mode, 
+                        ambientColor);  
 
-                    Vec3 ambient = material.DiffuseColor * ambientColor;
-                    finalColor = ambient + lighting;
+                  //  Vec3 ambient = material.DiffuseColor * ambientColor;
+                  //  finalColor = ambient + lighting;
                 }
                 else
                 {
-                    // LEGACY: Blinn-Phong с directional light
-                    float cR = oR * ambientColor.X;
-                    float cG = oG * ambientColor.Y;
-                    float cB = oB * ambientColor.Z;
-
                     float lDirX = lightDir.X, lDirY = lightDir.Y, lDirZ = lightDir.Z;
                     float lR = light.Color.X, lG = light.Color.Y, lB = light.Color.Z;
+                    float aR = ambientColor.X, aG = ambientColor.Y, aB = ambientColor.Z;
 
-                    // DIFFUSE
-                    float dotNL = float.Max(0f, nx * lDirX + ny * lDirY + nz * lDirZ);
-                    cR += lR * oR * dotNL;
-                    cG += lG * oG * dotNL;
-                    cB += lB * oB * dotNL;
-
-                    // SPECULAR (Blinn-Phong)
-                    float hx = lDirX + vx;
-                    float hy = lDirY + vy;
-                    float hz = lDirZ + vz;
-                    float hLen = float.Sqrt(hx * hx + hy * hy + hz * hz);
-                    
-                    if (hLen > 1e-7f)
-                    {
-                        float invH = 1f / hLen;
-                        hx *= invH; hy *= invH; hz *= invH;
-
-                        float dotHN = float.Max(0f, nx * hx + ny * hy + nz * hz);
-                        float spec  = float.Pow(dotHN, gloss);
-
-                        float ks = hasSpecular
-                            ? specularTex!.SampleGrayscale(uv.U, uv.V)
-                            : 1f;
-
-                        cR += lR * ks * spec;
-                        cG += lG * ks * spec;
-                        cB += lB * ks * spec;
-                    }
-
-                    finalColor = new Vec3(cR, cG, cB);
+                    finalColor = LightingHelper.ComputePhongLighting(
+                        nx, ny, nz,
+                        lDirX, lDirY, lDirZ,
+                        vx, vy, vz,
+                        lR, lG, lB,
+                        oR, oG, oB,
+                        aR, aG, aB,
+                        ks,
+                        gloss,
+                        light.Mode);
                 }
 
-                // Clamping и запись пикселя
                 SetPixelAfterZTest(rowBase + x, z,
                     Vec3ToColor(
                         float.Min(finalColor.X, 1f),
@@ -375,11 +348,7 @@ public sealed class Rasterizer
         Vec3 ambientColor = ambientColorOverride ?? light.AmbientColor;
         float gloss = light.Glossiness;
         ShadingMode mode = light.Mode;
-        //float oR = objColor.X, oG = objColor.Y, oB = objColor.Z;
-        //float lR = light.Color.X, lG = light.Color.Y, lB = light.Color.Z;
-        //float aR = light.AmbientColor.X, aG = light.AmbientColor.Y, aB = light.AmbientColor.Z;
-        //float ambR = oR * aR, ambG = oG * aG, ambB = oB * aB;
-        //float lDirX = lightDir.X, lDirY = lightDir.Y, lDirZ = lightDir.Z;
+
         for (int y = minY; y <= maxY; y++)
         {
             float w0 = w0_row, w1 = w1_row, w2 = w2_row;
@@ -443,19 +412,36 @@ public sealed class Rasterizer
 
                 if (lightSource != null)
                 {
-                    // НОВАЯ СИСТЕМА
                     var material = new Material(objColor, 1f, gloss);
-                    Vec3 lighting = lightSource.ComputeLighting(
-                        worldPos, normalVec, viewDirVec, material);
-                    Vec3 ambient = objColor * ambientColor;
-                    finalColor = ambient + lighting;
+                    
+                    finalColor = lightSource.ComputeLighting(
+                        worldPos, 
+                        normalVec, 
+                        viewDirVec, 
+                        material,
+                        mode,
+                        ambientColor);
+
+                  //  Vec3 ambient = objColor * ambientColor;
+                   // finalColor = ambient + lighting;
                 }
                 else
                 {
-                    // LEGACY
-                    finalColor = ComputeLegacyPhong(
-                        normalVec, worldPos, viewDirVec, eye,
-                        lightDir, light, objColor, ambientColor, gloss, mode);
+                    float lDirX = lightDir.X, lDirY = lightDir.Y, lDirZ = lightDir.Z;
+                    float lR = light.Color.X, lG = light.Color.Y, lB = light.Color.Z;
+                    float aR = ambientColor.X, aG = ambientColor.Y, aB = ambientColor.Z;
+                    float oR = objColor.X, oG = objColor.Y, oB = objColor.Z;
+
+                    finalColor = LightingHelper.ComputePhongLighting(
+                        nx, ny, nz,
+                        lDirX, lDirY, lDirZ,
+                        vx, vy, vz,
+                        lR, lG, lB,
+                        oR, oG, oB,
+                        aR, aG, aB,
+                        1f,       // ks = 1.0 (без specular текстуры)
+                        gloss,
+                        mode);
                 }
 
                 SetPixelAfterZTest(rowBase + x, z, Vec3ToColor(finalColor));
@@ -464,75 +450,6 @@ public sealed class Rasterizer
             }
 
             w0_row += dw0_dy; w1_row += dw1_dy; w2_row += dw2_dy;
-        }
-    }
-
-    private Vec3 ComputeLegacyPhong(
-        Vec3 normal, Vec3 worldPos, Vec3 viewDir, Vec3 eye,
-        Vec3 lightDir, LightSettings light,
-        Vec3 objColor, Vec3 ambientColor, float gloss, ShadingMode mode)
-    {
-        float nx = normal.X, ny = normal.Y, nz = normal.Z;
-        float vx = viewDir.X, vy = viewDir.Y, vz = viewDir.Z;
-        float lDirX = lightDir.X, lDirY = lightDir.Y, lDirZ = lightDir.Z;
-        float lR = light.Color.X, lG = light.Color.Y, lB = light.Color.Z;
-        float aR = ambientColor.X, aG = ambientColor.Y, aB = ambientColor.Z;
-        float oR = objColor.X, oG = objColor.Y, oB = objColor.Z;
-
-        float ambR = oR * aR, ambG = oG * aG, ambB = oB * aB;
-
-        switch (mode)
-        {
-            case ShadingMode.Ambient:
-                return new Vec3(ambR, ambG, ambB);
-
-            case ShadingMode.Diffuse:
-                float diffD = float.Max(0f, nx * lDirX + ny * lDirY + nz * lDirZ);
-                return new Vec3(lR * oR * diffD, lG * oG * diffD, lB * oB * diffD);
-
-            case ShadingMode.Specular:
-                float hxS = lDirX + vx, hyS = lDirY + vy, hzS = lDirZ + vz;
-                float hLenS = float.Sqrt(hxS * hxS + hyS * hyS + hzS * hzS);
-                float specS = 0f;
-                if (hLenS > 1e-7f)
-                {
-                    float invH = 1f / hLenS;
-                    specS = float.Pow(float.Max(0f,
-                        nx * hxS * invH + ny * hyS * invH + nz * hzS * invH), gloss);
-                }
-                return new Vec3(lR * specS, lG * specS, lB * specS);
-
-            case ShadingMode.PhongBlinn:
-                float diffB = float.Max(0f, nx * lDirX + ny * lDirY + nz * lDirZ);
-                float hxB = lDirX + vx, hyB = lDirY + vy, hzB = lDirZ + vz;
-                float hLenB = float.Sqrt(hxB * hxB + hyB * hyB + hzB * hzB);
-                float specB = 0f;
-                if (hLenB > 1e-7f)
-                {
-                    float invH = 1f / hLenB;
-                    specB = float.Pow(float.Max(0f,
-                        nx * hxB * invH + ny * hyB * invH + nz * hzB * invH), gloss);
-                }
-                return new Vec3(
-                    ambR + lR * oR * diffB + lR * specB,
-                    ambG + lG * oG * diffB + lG * specB,
-                    ambB + lB * oB * diffB + lB * specB);
-
-            case ShadingMode.Phong:
-                float dotNL = nx * lDirX + ny * lDirY + nz * lDirZ;
-                float diffP = float.Max(0f, dotNL);
-                float rx = 2f * dotNL * nx - lDirX;
-                float ry = 2f * dotNL * ny - lDirY;
-                float rz = 2f * dotNL * nz - lDirZ;
-                float dotRV = float.Max(0f, rx * vx + ry * vy + rz * vz);
-                float specP = float.Pow(dotRV, gloss);
-                return new Vec3(
-                    ambR + lR * oR * diffP + lR * specP,
-                    ambG + lG * oG * diffP + lG * specP,
-                    ambB + lB * oB * diffP + lB * specP);
-
-            default:
-                return new Vec3(ambR, ambG, ambB);
         }
     }
 
@@ -651,6 +568,7 @@ public sealed class Rasterizer
 
         return (a << 24) | (ri << 16) | (gi << 8) | bi;
     }
+
     public static Vec3 ColorToVec3(uint c) => new(
         ((c >> 16) & 0xFF) / 255f,
         ((c >> 8) & 0xFF) / 255f,

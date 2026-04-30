@@ -208,7 +208,7 @@ public partial class MainWindow : Window
                 break;
         }
 
-        DrawLightGizmo();
+       // DrawLightGizmo();
         RequestRender();
     }
 
@@ -245,7 +245,7 @@ public partial class MainWindow : Window
         {
             Width = 20,
             Height = 20,
-            Fill = new SolidColorBrush(Color.FromRgb(255, 255, 100)),
+            Fill = new SolidColorBrush(Color.FromRgb(255, 255, 255)),
             Stroke = new SolidColorBrush(Colors.White),
             StrokeThickness = 2
         };
@@ -359,7 +359,7 @@ public partial class MainWindow : Window
                 Dispatcher.UIThread.Post(() => 
                 {
                     FpsText.Text = $"{fps:F0} fps";
-                    DrawLightGizmo();
+                   // DrawLightGizmo();
                 });
             }
 

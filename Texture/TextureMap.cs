@@ -23,6 +23,10 @@ public sealed class TextureMap
     public int Width  => _width;
     public int Height => _height;
 
+
+    private const float Gamma    = 2.2f; // in lin
+    private const float InvGamma = 1f / 2.2f;// in srgb
+
     private TextureMap(uint[] pixels, int w, int h)
     {
         _pixels      = pixels;
@@ -73,9 +77,6 @@ public sealed class TextureMap
         catch { return null; }
     }
 
-    /// Билинейная интерполяция текстур — смешивает цвета 4 соседних текселей.
-    /// Магнификация — близко приблизили, пиксель накрывает меньше одного текселя.
-    /// Минификация — далеко, один пиксель накрывает много текселей (муаровые узоры без фильтрации)."
     public Vec3 SampleBilinear(float u, float v)
     {
         float vFlipped = 1f - v;
@@ -83,8 +84,8 @@ public sealed class TextureMap
         float fx = u        * _widthFloat  - 0.5f;
         float fy = vFlipped * _heightFloat - 0.5f;
 
-        int x0 = (int)MathF.Floor(fx);
-        int y0 = (int)MathF.Floor(fy);
+        int x0 = (int)float.Floor(fx);
+        int y0 = (int)float.Floor(fy);
         
         // Др
         float tx = fx - x0;
@@ -106,12 +107,29 @@ public sealed class TextureMap
         return BilinearBlend(c00, c10, c01, c11, tx, ty);
     }
 
-    public float SampleGrayscale(float u, float v)
+    public Vec3 SampleBilinearLinear(float u, float v)
     {
-        Vec3 c = SampleBilinear(u, v);
-        return 0.299f * c.X + 0.587f * c.Y + 0.114f * c.Z;
+        Vec3 srgb = SampleBilinear(u, v);
+        return ToLinear(srgb);
+    }
+    public static float ToLinear(float c)
+    {
+        return float.Pow(c, Gamma);
+    }
+    public static float ToSrgb(float c)
+    {
+        if (c <= 0f) return 0f;
+        return float.Pow(c, InvGamma);
     }
 
+    public static Vec3 ToLinear(in Vec3 c)
+    {
+        return new Vec3(ToLinear(c.X), ToLinear(c.Y), ToLinear(c.Z));
+    }
+    public static Vec3 ToSrgb(in Vec3 c)
+    {
+        return new Vec3(ToSrgb(c.X), ToSrgb(c.Y), ToSrgb(c.Z));
+    }
 
     private static int WrapCoord(int x, int size, int mask)
     {

@@ -152,6 +152,7 @@ public class Render
 
         // РАСТЕРИЗАЦИЯ ГРАНЕЙ
         Parallel.For(0, model.Faces.Count, fi =>
+        //for (int fi = 0; fi < model.Faces.Count; fi++)
         {
             var face = model.Faces[fi];
             int faceVerts = face.Vertices.Count;

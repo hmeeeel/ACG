@@ -13,7 +13,8 @@ public class LightingManager
     {
         var defaultLight = new DirectionalLight(0.577f, -0.816f, 0.577f)
         {
-            Color = new Vec3(1f, 1f, 1f),
+            //Color = new Vec3(1f, 1f, 1f),
+            Color = TextureMap.ToLinear(new Vec3(1f, 0.95f, 0.9f)),
             Intensity = 1f
         };
         _lights.Add(defaultLight);

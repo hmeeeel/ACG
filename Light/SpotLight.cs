@@ -27,7 +27,6 @@ public class SpotLight : LightSource
 
     public override Vec3 GetLightDirection(Vec3 fragmentPos)
     {
-        // Так же, как у Point Light - от фрагмента к источнику
         return (Position - fragmentPos).Normalized();
     }
 
@@ -39,17 +38,14 @@ public class SpotLight : LightSource
         ShadingMode mode,
         Vec3 ambientColor)
     {
-        // Вектор от фрагмента к источнику (не нормализованный)
         Vec3 toLight = Position - fragmentPos;
         float distance = toLight.Length;
         Vec3 L = distance > 1e-6f 
             ? toLight / distance 
             : new Vec3(0f, 1f, 0f);
 
-//ЗАТУХАНИЕ С РАССТОЯНИЕМ 
         float attenuation = 1f / (distance * distance + 0.01f);
         
-         //  ОТ источника К фрагменту
         float theta = Vec3.Dot(Direction, -L);
         float spotIntensity = ComputeSpotIntensity(theta);
         
@@ -85,7 +81,6 @@ public class SpotLight : LightSource
         if (theta < OuterCutoff) return 0f;
         if (theta > InnerCutoff) return 1f;
         
-        // intensity = (theta - outer) / (inner - outer)
         float epsilon = InnerCutoff - OuterCutoff;
         float intensity = (theta - OuterCutoff) / epsilon;
         

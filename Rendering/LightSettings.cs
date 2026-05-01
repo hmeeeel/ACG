@@ -12,7 +12,7 @@ public struct LightSettings
     {
         Direction    = new Vec3(0.577f, 0.816f, 0.577f), // new Vec3(-1f, 1f, -1f),
         Color        = new Vec3(1f,  1f,  1f), // new Vec3(1f, 1f, 1f),
-        AmbientColor = new Vec3(0.2f, 0.2f, 0.2f),
+        AmbientColor = new Vec3(0.32f, 0.32f, 0.32f),
         ObjectColor  = 0xFF00FF00, // 0xFFCC3399
         Glossiness   = 8f,
         Mode         = ShadingMode.Lambert,

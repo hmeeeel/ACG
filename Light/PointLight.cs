@@ -17,7 +17,6 @@ public class PointLight : LightSource
 
     public override Vec3 GetLightDirection(Vec3 fragmentPos)
     {
-        // Вектор L = направление ОТ фрагмента К источнику
         return (Position - fragmentPos).Normalized();
     }
 
@@ -29,10 +28,7 @@ public class PointLight : LightSource
         ShadingMode mode,
         Vec3 ambientColor)
     {
-        // Вектор от фрагмента к источнику (НЕ нормализованный!)
         Vec3 toLight = Position - fragmentPos;
-        // ВАЖНО: Вычисляем расстояние ДО нормализации
-        // distance = length(toLight) = sqrt(dx² + dy² + dz²)
         float distance = toLight.Length;
         //норм
         Vec3 L = distance > 1e-6f 

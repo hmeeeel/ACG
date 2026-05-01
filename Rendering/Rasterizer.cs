@@ -67,9 +67,12 @@ public sealed class Rasterizer
                 out float w0_row, out float w1_row, out float w2_row))
             return;
 
-        Vec3 ambientColor = ambientColorOverride ?? light.AmbientColor;
+     //   Vec3 ambientColor = ambientColorOverride ?? light.AmbientColor;
+     //   Vec3 objColor = ColorToVec3(light.ObjectColor);
+
         float gloss = light.Glossiness;
-        Vec3 objColor = ColorToVec3(light.ObjectColor);
+        Vec3 ambientColor = TextureMap.ToLinear(ambientColorOverride ?? light.AmbientColor);
+        Vec3 objColor = TextureMap.ToLinear(ColorToVec3(light.ObjectColor));
 
         bool hasDiffuse  = diffuseTex  != null && light.TexMode != TextureMode.None;
         bool hasNormal   = normalTex   != null &&
@@ -114,7 +117,7 @@ public sealed class Rasterizer
                     out float invW, out float wCorr,
                     out Vec2 uv, out Vec3 normal, out Vec3 worldPos);
 
-                // НОРМАЛЬ
+ // НОРМАЛЬ
                 float nx, ny, nz;
                 
                 if (hasNormal)
@@ -154,7 +157,7 @@ public sealed class Rasterizer
                 }
                 Vec3 viewDirVec = new Vec3(vx, vy, vz);
 
-                // ДИФФУЗНЫЙ ЦВЕТ
+  // ДИФФУЗНЫЙ ЦВЕТ
                 float oR, oG, oB;
                 
                 if (hasDiffuse &&
@@ -164,9 +167,10 @@ public sealed class Rasterizer
                      light.TexMode == TextureMode.Specular))
                 {
                     Vec3 diffuse = diffuseTex!.SampleBilinear(uv.U, uv.V);
-                    oR = diffuse.X;
-                    oG = diffuse.Y;
-                    oB = diffuse.Z;
+                    Vec3 diffuseLinear = TextureMap.ToLinear(diffuse);
+                     oR = diffuseLinear.X; //diffuse
+                     oG = diffuseLinear.Y;
+                     oB = diffuseLinear.Z;
                 }
                 else
                 {
@@ -175,9 +179,18 @@ public sealed class Rasterizer
                     oB = objColor.Z;
                 }
 
-                float ks = hasSpecular
-                    ? specularTex!.SampleGrayscale(uv.U, uv.V)
-                    : 1f;
+//ЗЕРКАЛЬНАЯ
+                float ks;
+                if (hasSpecular)
+                {
+                    Vec3 specMask = specularTex!.SampleBilinear(uv.U, uv.V);
+                    ks = specMask.X;
+                }
+                else
+                {
+                    ks = 1f;
+                }
+
 
                 Vec3 finalColor;
                 
@@ -217,11 +230,12 @@ public sealed class Rasterizer
                         light.Mode);
                 }
 
+                Vec3 outputSrgb = TextureMap.ToSrgb(finalColor);
                 SetPixelAfterZTest(rowBase + x, z,
                     Vec3ToColor(
-                        float.Min(finalColor.X, 1f),
-                        float.Min(finalColor.Y, 1f),
-                        float.Min(finalColor.Z, 1f)));
+                        float.Min(outputSrgb.X, 1f),
+                        float.Min(outputSrgb.Y, 1f),
+                        float.Min(outputSrgb.Z, 1f)));
 
                 w0 += dw0_dx; w1 += dw1_dx; w2 += dw2_dx;
             }
@@ -262,12 +276,16 @@ public sealed class Rasterizer
     }
 
     public void DrawTriangleGouraud(
-        Vec3 s0, Vec3 s1, Vec3 s2,
-        Vec3 c0, Vec3 c1, Vec3 c2)
+    Vec3 s0, Vec3 s1, Vec3 s2,
+    Vec3 c0, Vec3 c1, Vec3 c2)
     {
         float area = Edge(s0, s1, s2);
         if (float.Abs(area) < 1e-6f) return;
         if (area < 0f) { (s1, s2) = (s2, s1); (c1, c2) = (c2, c1); }
+
+        Vec3 lc0 = TextureMap.ToLinear(c0);
+        Vec3 lc1 = TextureMap.ToLinear(c1);
+        Vec3 lc2 = TextureMap.ToLinear(c2);
 
         if (!SetupTriangle(
                 ref s0, ref s1, ref s2,
@@ -301,10 +319,18 @@ public sealed class Rasterizer
                     continue;
                 }
 
-                float r = b0 * c0.X + b1 * c1.X + b2 * c2.X;
-                float g = b0 * c0.Y + b1 * c1.Y + b2 * c2.Y;
-                float b = b0 * c0.Z + b1 * c1.Z + b2 * c2.Z;
-                SetPixelAfterZTest(rowBase + x, z, Vec3ToColor(r, g, b));
+                float r = b0 * lc0.X + b1 * lc1.X + b2 * lc2.X;
+                float g = b0 * lc0.Y + b1 * lc1.Y + b2 * lc2.Y;
+                float b = b0 * lc0.Z + b1 * lc1.Z + b2 * lc2.Z;
+
+                Vec3 linearColor = new Vec3(
+                    float.Clamp(r, 0f, 1f),
+                    float.Clamp(g, 0f, 1f),
+                    float.Clamp(b, 0f, 1f)
+                );
+
+                Vec3 srgbColor = TextureMap.ToSrgb(linearColor);
+                SetPixelAfterZTest(rowBase + x, z, Vec3ToColor(srgbColor));
 
                 w0 += dw0_dx; w1 += dw1_dx; w2 += dw2_dx;
             }
@@ -344,8 +370,15 @@ public sealed class Rasterizer
                 out float w0_row, out float w1_row, out float w2_row))
             return;
 
-        Vec3 objColor = ColorToVec3(light.ObjectColor);
-        Vec3 ambientColor = ambientColorOverride ?? light.AmbientColor;
+      //  Vec3 objColor = ColorToVec3(light.ObjectColor);
+     //   Vec3 ambientColor = ambientColorOverride ?? light.AmbientColor;
+
+        Vec3 srgbObjColor = ColorToVec3(light.ObjectColor);
+        Vec3 objColor = TextureMap.ToLinear(srgbObjColor);
+
+        Vec3 srgbAmbient = ambientColorOverride ?? light.AmbientColor;
+        Vec3 ambientColor = TextureMap.ToLinear(srgbAmbient);
+
         float gloss = light.Glossiness;
         ShadingMode mode = light.Mode;
 
@@ -442,9 +475,10 @@ public sealed class Rasterizer
                         1f,       // ks = 1.0 (без specular текстуры)
                         gloss,
                         mode);
+                        
                 }
-
-                SetPixelAfterZTest(rowBase + x, z, Vec3ToColor(finalColor));
+Vec3 outputSrgb = TextureMap.ToSrgb(finalColor);
+                SetPixelAfterZTest(rowBase + x, z, Vec3ToColor(outputSrgb));
 
                 w0 += dw0_dx; w1 += dw1_dx; w2 += dw2_dx;
             }
@@ -576,14 +610,18 @@ public sealed class Rasterizer
 
     public static uint Vec3ToColor(float r, float g, float b)
     {
-        int ri = (int)(r * 255f);
-        int gi = (int)(g * 255f);
-        int bi = (int)(b * 255f);
+        float noise = ((float)_rng.Value!.NextDouble() - 0.5f) / 255f;
+
+        int ri = (int)((r + noise) * 255f);
+        int gi = (int)((g + noise) * 255f);
+        int bi = (int)((b + noise) * 255f);
         ri = int.Clamp(ri, 0, 255);
         gi = int.Clamp(gi, 0, 255);
         bi = int.Clamp(bi, 0, 255);
         return (0xFFu << 24) | ((uint)ri << 16) | ((uint)gi << 8) | (uint)bi;
     }
+
+    private static readonly ThreadLocal<Random> _rng = new(() => new Random());
 
     public static uint Vec3ToColor(Vec3 c) => Vec3ToColor(c.X, c.Y, c.Z);
 }
